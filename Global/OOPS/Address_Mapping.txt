@@ -158,7 +158,7 @@ insert into @PostCodeMapping (PostCode, LHD, RegionalName, CouncilName, [Suburb/
 ,('2166','South Western Sydney','Sydney Outer','Fairfield City Council','CABRAMATTA',NULL)
 ,('2167','South Western Sydney','Sydney Outer','Campbelltown City Council','GLENFIELD',NULL)
 ,('2168','South Western Sydney','Sydney Outer','Liverpool City Council','ASHCROFT',NULL)
-,('2170','South Western Sydney','Sydney Outer','Fairfield City Council','MOUNT PRITCHARD','***')
+,('2170','South Western Sydney','Sydney Outer','Liverpool City Council','MOUNT PRITCHARD','***')
 ,('2171','South Western Sydney','Sydney Outer','Camden Council','AUSTRAL PARK',NULL)
 ,('2172','South Western Sydney','Sydney Outer','Liverpool City Council','PLEASURE POINT',NULL)
 ,('2173','South Western Sydney','Sydney Outer','Liverpool City Council','ANZAC VILLAGE',NULL)
