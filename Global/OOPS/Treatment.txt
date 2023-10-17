@@ -150,7 +150,7 @@ FROM
 CTE_cp 
 
 LEFT OUTER JOIN dbo.Staff s  ON CTE_cp.MD_ID = s.Staff_ID
-LEFT OUTER JOIN  (Select ei.ID_Code, Staff_id, row_number() over (partition by  Staff_id, ei.ID_Code ORDER by staff_id) as roww From dbo.Ext_ID ei WHere ei.Ext_Type LIKE 'AHPRA' AND ei.ID_Code LIKE 'MED%') as ei ON s.Staff_ID = ei.Staff_id and ei.roww = 1
+LEFT OUTER JOIN  (Select ei.ID_Code, Staff_id, row_number() over (partition by  Staff_id, ei.ID_Code ORDER by staff_id) as roww From dbo.Ext_ID ei WHere ei.Ext_Type LIKE 'ST LICENSE' AND ei.ID_Code LIKE 'MED%') as ei ON s.Staff_ID = ei.Staff_id and ei.roww = 1
 INNER JOIN Patient p ON CTE_cp.Pat_ID1 = p.Pat_Id1
 LEFT OUTER JOIN Ident i ON p.Pat_ID1 = i.Pat_ID1 AND i.Version = 0
 LEFT OUTER JOIN 
