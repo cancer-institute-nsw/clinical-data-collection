@@ -44,7 +44,7 @@
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 
 --use [MOSAIQREPORT]
-go 
+--go 
  
 
 declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @hosp_code varchar(10), @deptcode varchar(10), @facicode varchar(10), @dt varchar(25)
