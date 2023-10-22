@@ -27,15 +27,18 @@
 *20220217: Updated to remove Type1 reference to order-set check box. As these are not used consistently at this site. Also updated the discontinue date logic as discDate does not include a time and can be discontinues on the same day as administration. PatCPlan.Discontinue_DtTm >= Convert(Date,CycleEffDate.Start_DtTm1))
 *20220310: Current version.
 *20230112: Added in Mapping for Tranfusion Episode Id.
-*20231016: Updated the facility mapping to detect based on Order.Inst_ID as HKH is not scheduling and the TreatemntLocation Script is unreliable for this site. I have setup the drug query to detect the Inst_ID. 
+*20231016: Enhanced the facility mapping to detect Order.Inst_ID as HKH is not reliably scheduling and the Treatemnt Location Script is not 100% correct for this site. I have setup the drug query to detect the Inst_ID. 
 			Its possbile this can be NULL as drug is LOJ. Therefore UPDATE is applied to find the highest frequency dept for that Group_ID.
 			In #OMIS;
 				OrdersInstID is the InstID from the Orders
 				TreatmentLocation.Inst_ID is the Scheduled Inst_ID
 				Update applied to find highest frequency OrderInstID where NULL
-				FacilityCodes added based on Department_OID and pager for InstID.
+				FacilityCodes added based on Department_OID and pager using a #temp_fac table.
+					Step 1 - Use schedule/appointment logic to detect the location (Inst_ID) a patient has attended for treatment.
+					Step 2 – Check the Orders Department and override the RNS location to the Hornsby Department if the Order Department is Hornsby.
 
 			Updated script to support DRUG level reporting for all Treatments.
+			Uncommented out drugs.regimen_cycle_number AS NotificationEpisodeChemoCycle  this appears to be an error.
 
 **********************************************************************************************************************************/
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
@@ -66,7 +69,17 @@ begin
 end
 if  @enddate > cast(getdate() as date)
   set @enddate = dateadd(d,1,cast(getdate() as date))
-   
+
+
+--Facilites Table--
+if object_id('tempdb..#temp_fac') is not null
+drop table #temp_fac
+
+--create table #fac (Inst_ID int, Department_OID varchar(10), Pager varchar(10), Inst_Abr varchar(10))
+select Inst_ID, Department_OID , pager, Inst_Abrv  INTO #temp_fac from config where pager IS NOT NULL AND pager LIKE '[A-Z]%'
+--Select * From #temp_fac
+
+
 
 set @debug = @QA
 declare @countries table (code int, name varchar(200))
@@ -678,8 +691,8 @@ SELECT DISTINCT TreatmentEvents.Pat_ID1,
 --	TreatmentEvents.delivered_instances   AS AntiNeoplasticCycles,   --SystemicTherapyCycles,
 --	TreatmentEvents.Regimen         AS ProtocolID,   -- SystemicTherapyProtocolID, eviQ protocal ID
 	case when charindex('v.',TreatmentEvents.regimen, 5) > 0 then substring(TreatmentEvents.regimen,1,charindex('v.',TreatmentEvents.regimen, 5)-2) else regimen end AS ProtocolID, 
-    --drugs.regimen_cycle_number   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
-    null   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
+    drugs.regimen_cycle_number   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
+    --null   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
 	drugs.drug_name        AS OMISDrugName,   --SystemicTherapyDrug,		-- 072 systemic therapy drug name 
 	drugs.dose1             AS NotificationEpisodeChemoDose,   --SystemicTherapyDose,	-- 073 Dose 
 	drugs.route            AS NotificationEpisodeChemoRouteID_original,   --SystemicTherapyRoute,	-- 074 Route 
@@ -1201,7 +1214,7 @@ FROM
 			stage8.Cycle_Length,
 			stage1.status_enum as plan_status,
 			stage4.Status_Enum as adm_status, 
-			case when cast(stage4.Adm_End_DtTm as date) < dateadd(d, stage8.Cycle_Length*-2,@enddate) then 1 else 0 end as isvalid,
+			case when cast(stage4.Adm_End_DtTm as date) < dateadd(d, stage8.Cycle_Length*-1,@enddate) then 1 else 0 end as isvalid,
 			row_number() over (partition by stage1.Pat_ID1, stage1.PCP_GROUP_ID  order by stage4.Adm_End_DtTm desc) as roww
 		FROM PatCPlan  AS stage1 with (nolock) 
 			JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
@@ -1264,7 +1277,7 @@ upper(mrn) like '[A-z]%'
 
 
 /*********************
-INST_ID FIX, as the site is not scheduling the script will use the Order.Inst_ID as the method of identifying the Facility.
+INST_ID FIX, as the scheduling location is not always 100% reliable, the script will also use the Order.Inst_ID as the method of identifying the Facility.
 --Not all Orders have and Inst_ID (as the Drug can be blank) this will updated the record with the highest frequency Inst_ID for that course.
 *********************/
 
@@ -1283,14 +1296,22 @@ SET OrdersInstID =
 			)  as recs)
 WHERE #omis.OrdersInstID IS NULL
 
-/**DELETES RECORDS FOR OTHER SITEs ***/
-DELETE #omis
-WHERE NOT(#omis.OrdersInstID IN (Select Inst_ID FROM Config Where pager =  @hospital))
-
 UPDATE #omis 
-Set FacilityCode = @facicode, TreatingFacilityCode = @deptcode
-Where OrdersInstID IN (Select Inst_ID FROM Config Where pager =  @hospital)
---AND ( FacilityCode IS NULL  OR TreatingFacilityCode IS NULL) -- this will keep the current scheduling option. NOT NEEDED.
+Set FacilityCode = (Select max(Department_OID) FROM #temp_fac where #temp_fac.Inst_ID = #omis.OrdersInstID) 
+, TreatingFacilityCode = (Select max(pager) FROM #temp_fac where #temp_fac.Inst_ID = #omis.OrdersInstID) 
+Where (FacilityCode IS NULL or TreatingFacilityCode IS NULL)
+
+--Overide Facility with Hornsby if any OrderInstID = 3.
+UPDATE #omis
+Set TreatingFacilityCode = (Select max(Department_OID) FROM #temp_fac where #temp_fac.Inst_ID = 3) 
+, FacilityCode= (Select max(pager) FROM #temp_fac where #temp_fac.Inst_ID = 3) 
+Where OrdersInstID = 3
+
+/**DELETES RECORDS FOR OTHER SITEs
+This is after facility mapping to ensure complete picture
+**/
+DELETE #omis
+WHERE NOT(#omis.FacilityCode LIKE @hospital OR #omis.FacilityCode IS NULL)
 
 
 /*
@@ -1665,11 +1686,11 @@ set a.EpisodeStartDate = e.Start_dttm, a.EpisodeEndDate = e.End_DtTm
 from #omis a
 	join #episodedates2 e on a.GroupID = e.PCP_Group_ID and a.Pat_ID1 = e.Pat_ID1
 where a.EpisodeStartDate < a.EpisodeEndDate
-
+/*
 update #omis
 set EpisodeEndDate = null, AntiNeoplasticCycles = null
 where EpisodeEndDate > @enddate or EpisodeEndDate = '' or EpisodeEndDate is null
- 
+ */
  
  
 update o
@@ -1705,7 +1726,7 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,	DoctorName
 	,	TreatingFacilityCode
 	,	FacilityCode
-	,   OrdersInstID
+--	,   OrdersInstID --testingonly
 	,	DateOfDiagnosis
 	,	CancerSiteCodeID
 	,	CancerSiteCodeIDVersion
@@ -1736,7 +1757,9 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,	EpisodeStartDate
 	,	EpisodeEndDate
 	,	AntiNeoplasticCycles
-	,	'1570' as ProtocolID
+	,	case when isnumeric(left(ProtocolID,3)) = 1 then ProtocolID
+		Else '1570'
+		END as ProtocolID
 	,	NotificationEpisodeChemoCycle
 	,	OMISDrugName
 	,	NotificationEpisodeChemoDose
@@ -1795,7 +1818,7 @@ select distinct	cast(GroupID  as varchar(20))
 	,	DoctorName
 	,	TreatingFacilityCode
 	,	FacilityCode
-	,	OrdersInstID
+--	,	OrdersInstID
 	,	DateOfDiagnosis
 	,	CancerSiteCodeID
 	,	CancerSiteCodeIDVersion
@@ -2958,7 +2981,7 @@ else
 	,'' as DoctorName
 	,'' as TreatingFacilityCode
 	,'' as FacilityCode
-	,'' as OrdersInstID
+--	,'' as OrdersInstID
 	,'' as DateOfDiagnosis
 	,'' as CancerSiteCodeID
 	,'' as CancerSiteCodeIDVersion
@@ -3030,7 +3053,7 @@ select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID
 	, isnull(cast(DoctorName as varchar(120)),'') as DoctorName
 	, isnull(cast(TreatingFacilityCode as varchar(4)),'') as TreatingFacilityCode
 	, isnull(left(cast(FacilityCode as varchar(30)),4),'') as FacilityCode
-	,isnull(left(cast(OrdersInstID as varchar(30)),4),'')  as OrdersInstID
+--	,isnull(left(cast(OrdersInstID as varchar(30)),4),'')  as OrdersInstID
 	, isnull(replace(right('0'+convert(varchar(10),DateOfDiagnosis, 103),10),'/',''),'01019999') as DateOfDiagnosis
 	, isnull(cast(CancerSiteCodeID as varchar(7)),'') as CancerSiteCodeID
 	, isnull(cast(CancerSiteCodeIDVersion as varchar(10)),'') as CancerSiteCodeIDVersion
@@ -3080,20 +3103,7 @@ select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID
 from #omis_final  )
 
 
--- SELECT * FROM #omis where OrdersInstID <>1
--- select * from #omis_final where OrdersInstID <>1
+-- SELECT * FROM #omis where EpisodeStartDate > EpisodeEndDate OrdersInstID <>1
+-- select * from #omis_final where EpisodeStartDate > EpisodeEndDate where OrdersInstID <>1
 -- select * from #omis_final  where GivenName1 like 'stephen%' and Surname like 'abbot%'
  --select * from #omis_final  where ClinicalTrialName = ''
-
-
-/*
-
- Select OrdersInstID, * From #omis --Where OrdersInstID =9
- Where Pat_ID1 IN (23941,
-41040,
-64286,
-64671,
-56002,
-60998,
-64281,
-64859)*/
