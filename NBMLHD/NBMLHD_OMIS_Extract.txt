@@ -17,7 +17,7 @@ There are three main queries
 *
 ****Updates *****
 * 20230516 version v0.1 completed using mappings from scoping excel.
-*
+* 20231115 version 1.0 updated MDT date and confimed consult mapping.
 *
 *
 *
@@ -27,14 +27,15 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 SET nocount on
 SET ANSI_WARNINGS OFF
 
-
+--use [MOSAIQREPORT]
+go 
+ 
 declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1)
 
 set @startdate = '&[ReportingStartDate]&'		-- start of month
 set @enddate = '&[ReportingEndDate]&'			-- end of month
 set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
-
 
 
 
@@ -169,12 +170,20 @@ insert into @cancerdiagnosis values (9, 'Unknown' )
 insert into @cancerdiagnosis values (2, 'Clinical diagnosis' )
 insert into @cancerdiagnosis values (2, 'Direct visualization' )
 insert into @cancerdiagnosis values (4, 'pMMR' )
+insert into @cancerdiagnosis values (6, 'Histology Met' )
 insert into @cancerdiagnosis values (5, 'Exfoliative cytology' )
 insert into @cancerdiagnosis values (9, '' )
 insert into @cancerdiagnosis values (7, 'Histology' )
+insert into @cancerdiagnosis values (5, 'Cytology' )
 insert into @cancerdiagnosis values (2, 'Microscopic confirm' )
+insert into @cancerdiagnosis values (2, 'Radiography' )
 insert into @cancerdiagnosis values (7, 'Histology Primary' )
-insert into @cancerdiagnosis values (2, 'Histology Metastatic' )
+insert into @cancerdiagnosis values (6, 'Histology Metastatic' )
+
+
+
+
+
 
 -- update 20220214
 insert into @indigenious values (1, 'Aboriginal          ' )
@@ -1061,6 +1070,7 @@ FROM
 		where s.Suppressed =0 and s.version = 0 and s.Activity in (select hsp_code from cpt with (nolock) where cGroup LIKE 'CON' --AND Description like '%pal1234%'
 		) group by pat_id1)  AS PalativeDate ON Medical1.Pat_ID1 = PalativeDate.Pat_ID1  --From EROD Query
 		LEFT OUTER JOIN 
+		-- this not being used. See update section of script.
 		(SELECT s.Pat_ID1, min(s.App_DtTm)  AS Act_DtTm1 
 			FROM Schedule s with (nolock)
 			join dbo.Schedule_ScheduleStatus_MTM ssm with (nolock) on s.Sch_ID = ssm.Sch_ID 
@@ -1257,6 +1267,9 @@ if object_id('tempdb..#episodedates2') is not null
  drop table #episodedates2
 if object_id('tempdb..#ecog') is not null
  drop table #ecog
+ if object_id('tempdb..#omis_mdt') is not null
+ drop table  #omis_mdt
+
  
  update #omis
 set calculated_end_date = dateadd(d, isnull(cycle_length,0)*isnull(last_cycle_number,0) , EpisodeStartDate) 
@@ -1322,8 +1335,14 @@ from (
 		LEFT JOIN Ext_ID with (nolock) ON t.Staff_ID = Ext_ID.Staff_ID
 	WHERE s.Suppressed =0 
 		and s.version = 0
-		and s.Activity IN (select hsp_code from cpt with (nolock)  where CGroup ='CON' AND Status_Inactive =0
-			              AND CPT_Code IS NOT NULL AND Description LIKE '%ology %')
+		and s.Activity IN (select hsp_code from cpt with (nolock)  
+							Where CGroup ='CON' AND Status_Inactive =0
+			              AND CPT_Code IS NOT NULL 
+						  AND 
+						  (Description LIKE '%New%'	
+						  OR Description LIKE '%Init%'
+						  OR Description LIKE '%Forced%')
+						  )
 						  
 						  /*hsp_code in (
 		'00110.00','00116.00','00116.01','00132.00','00133.00','00110.01','00110.02','00132.00','00110.03','00132.01','00132.02','00116.00'
@@ -1586,22 +1605,47 @@ UPDATE #omis
 set MDTDate = null
 where  MDTDate  < coalesce(DateOfDiagnosis,DateOfBirth) 
 
--- MDTDate
-update a 
-set a.MDTDate = b.Act_DtTm1
-from #omis a
-	join (SELECT s.Pat_ID1, d.groupid, max(s.App_DtTm)  AS Act_DtTm1 
-		FROM Schedule s with (nolock)
-			join dbo.Schedule_ScheduleStatus_MTM ssm with (nolock) on s.Sch_ID = ssm.Sch_ID 
-			join dbo.ScheduleStatus ss with (nolock) on ssm.ScheduleStatusID = ss.ScheduleStatusID and ss.SystemDefined = 1  and ss.ScheduleStatusID <> 8 -- not cancel
-		--		join (select pat_id1, min(dx_dttm) as dx_dttm from #diagnosedate group by pat_id1) d on d.PAT_ID1 = s.Pat_ID1 and s.App_DtTm >= d.dx_dttm
-				join (select pat_id1, groupid, min(DateOfDiagnosis) as dx_dttm, isnull(min(EpisodeStartDate),getdate()) as EpisodeStartDate from #omis group by pat_id1, groupid) d on d.PAT_ID1 = s.Pat_ID1 and cast(s.App_DtTm as date)>= dateadd(dd,-30,d.dx_dttm) and cast(s.App_DtTm as date) <= EpisodeStartDate
-		WHERE s.Suppressed =0 
-			and s.version = 0
-			and s.Activity IN (select hsp_code from cpt with (nolock) where Description like '%mdt%') 
-		group by s.Pat_ID1, d.groupid) b on   a.Pat_ID1 = b.Pat_ID1 and a.GroupID = b.GroupID
 
-		
+-- MDTDate
+--drop table #omis_mdt
+Select DISTINCT Pat_ID1, GroupID, EpisodeStartDate, CAST(NULL AS DATE) AS MDTDate
+INTO #omis_mdt
+FROM #omis
+
+update #omis_mdt
+set MDTDate = (
+select max(obj.Encounter_DtTm) as Doc_DtTm--, obj.Pat_ID1
+from Object as obj 
+left outer join Staff as st on obj.Review_ID=st.Staff_ID
+where obj.DocType  = '2089' 
+and obj.Encounter_DtTm < #omis_mdt.EpisodeStartDate
+and #omis_mdt.Pat_ID1 = obj.Pat_ID1)  
+
+
+UPDATE #omis
+SET MDTDate = 
+(Select MAX(#omis_mdt.MDTDate) 
+FROM #omis_mdt 
+Where #omis.GroupID = #omis_mdt.GroupID
+)
+
+
+/*
+FROM #omis_mdt a 
+join
+(
+select max(obj.Encounter_DtTm) as Doc_DtTm, obj.Pat_ID1
+from Object as obj 
+left outer join Staff as st on obj.Review_ID=st.Staff_ID
+where obj.DocType  = '2089' 
+and obj.Encounter_DtTm < #omis_mdt.EpisodeStartDate
+and #omis_mdt.Pat_ID1 = obj.Pat_ID1)  
+--and obj.Encounter_DtTm <= min(sch.App_DtTm)
+--and obj.Encounter_DtTm >= min(sch.App_DtTm) - 365
+
+Group by obj.Pat_ID1
+)  as MDTDoc ON a.Pat_ID1=MDTDoc.Pat_ID1  AND 
+	*/
 
 -- episode start/end dates 			 
 SELECT distinct PatCPlan.PCP_GROUP_ID
