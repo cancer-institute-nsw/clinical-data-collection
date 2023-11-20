@@ -1088,6 +1088,7 @@ FROM
 			FROM Schedule s with (nolock)
 			join dbo.Schedule_ScheduleStatus_MTM ssm with (nolock) on s.Sch_ID = ssm.Sch_ID 
 			join dbo.ScheduleStatus ss with (nolock) on ssm.ScheduleStatusID = ss.ScheduleStatusID and ss.SystemDefined = 1  and ss.ScheduleStatusID = 9  -- charge
+			join dbo.Staff t with (nolock) on s.Staff_Id = t.Staff_Id
 			WHERE s.Suppressed =0 
 				and s.version = 0
 				and s.Activity IN 
@@ -1100,6 +1101,11 @@ FROM
 						  OR Description LIKE '%Init%'
 						  OR Description LIKE '%Forced%'
 						  )
+
+				AND		( t.Type LIKE 'Med Onc' 
+				OR  t.Type LIKE 'Haem' 
+				OR t.Type LIKE 'Gynae Onc'   
+					) 
 				)
 				--and App_DtTm >= (select isnull(dateadd(d,0,min(Dx_DtTm)),'1900-01-01') from Medical where Diagnosis_Class = 1  and pat_id1=Schedule.Pat_ID1)  -- and Dx_DtTm is not null
 			GROUP BY s.Pat_ID1
@@ -1343,6 +1349,10 @@ from (
 						  OR Description LIKE '%Init%'
 						  OR Description LIKE '%Forced%')
 						  )
+		AND		( t.Type LIKE 'Med Onc' 
+				OR  t.Type LIKE 'Haem' 
+				OR t.Type LIKE 'Gynae Onc'   
+				) 
 						  
 						  /*hsp_code in (
 		'00110.00','00116.00','00116.01','00132.00','00133.00','00110.01','00110.02','00132.00','00110.03','00132.01','00132.02','00116.00'
@@ -1398,7 +1408,8 @@ from #omis a
 		
 		join (SELECT o.Pat_ID1, c.GroupID, max(o.Eff_DtTm) as Eff_DtTm1  
 		FROM PatAuth o with (nolock)
-		INNER JOIN Staff (nolock) on Ref_To_Physician_PNP_ID = Staff.PNP_ID	AND	(Staff.Type LIKE 'Haem%' OR Staff.Type LIKE 'Med Onc%') --idenitfy med haem referals
+		INNER JOIN Staff (nolock) on Ref_To_Physician_PNP_ID = Staff.PNP_ID	AND	(Staff.Type LIKE 'Haem%' OR Staff.Type LIKE 'Med Onc%' OR Staff.Type LIKE 'Gynae Onc%'   
+				 ) --idenitfy med haem referals
 		join 	(select pat_id1, groupid,   min(EpisodeStartDate) as dx_dttm, min(ConsultationDate) as ConsultationDate  from #omis group by pat_id1, groupid) c 
 					on o.Pat_ID1 = c.Pat_ID1 
 					and cast(o.Eff_DtTm as date) <= c.ConsultationDate 
