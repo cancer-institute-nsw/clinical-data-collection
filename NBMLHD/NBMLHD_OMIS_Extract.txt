@@ -1084,7 +1084,7 @@ FROM
 		) AS MDT1 ON Medical1.Pat_ID1 = MDT1.Pat_ID1
 	LEFT OUTER JOIN
 	
-	(SELECT s.Pat_ID1, min(s.App_DtTm)  AS Act_DtTm1 
+	(SELECT s.Pat_ID1, min(s.App_DtTm)  AS Act_DtTm1
 			FROM Schedule s with (nolock)
 			join dbo.Schedule_ScheduleStatus_MTM ssm with (nolock) on s.Sch_ID = ssm.Sch_ID 
 			join dbo.ScheduleStatus ss with (nolock) on ssm.ScheduleStatusID = ss.ScheduleStatusID and ss.SystemDefined = 1  and ss.ScheduleStatusID = 9  -- charge
@@ -1275,6 +1275,10 @@ if object_id('tempdb..#ecog') is not null
  drop table #ecog
  if object_id('tempdb..#omis_mdt') is not null
  drop table  #omis_mdt
+  if object_id('tempdb..#drfix') is not null --constom for retospective data fix.
+ drop table  #drfix
+   if object_id('tempdb..#dx_flag') is not null --cusotm of retrospective data fix.
+ drop table  #dx_flag
 
  
  update #omis
@@ -1329,7 +1333,7 @@ where  ConsultationDate  <  coalesce(ReferralDate, DateOfDiagnosis,DateOfBirth) 
 select Pat_ID1, groupID, Act_DtTm1, OncName, OncAHPRA
 into #consultation
 from (
-	SELECT s.Pat_ID1, e.groupID, s.App_DtTm  AS Act_DtTm1 ,
+	SELECT s.Pat_ID1, e.groupID, s.App_DtTm  AS Act_DtTm1 , 
 		ISNULL(ltrim(rtrim(t.First_Name) +' '+replace(ltrim(substring(t.Last_Name, 1,charindex(' ',t.Last_Name)-1)),',','')),'') as OncName,
 		ISNULL(Ext_ID.ID_Code, '') AS OncAHPRA, t.type as staff_type, 
 		ROW_NUMBER () over (partition by s.Pat_ID1, e.groupID order by len(Ext_ID.ID_Code) desc, s.App_DtTm desc) as roww
@@ -1353,37 +1357,58 @@ from (
 				OR  t.Type LIKE 'Haem' 
 				OR t.Type LIKE 'Gynae Onc'   
 				) 
-						  
-						  /*hsp_code in (
-		'00110.00','00116.00','00116.01','00132.00','00133.00','00110.01','00110.02','00132.00','00110.03','00132.01','00132.02','00116.00'
-		,'00119.00','00116.01','00116.02','00116.03','00116.025','00133.01','00110.04','00116.021','C90011','C90007'
-		,'C90003','C90015','H10002','H10003','C90021','C90002','C90006','C90010','C90014','C90020'
-		,'132.01','H10002','H10003','119.00','HMFUOS','132.00','HaemInCons','HICNo','Z10020','110.00','HMNCDVA','HMNewOS','133.00','HMFUCDVA'
-		,'HSCNo','A10001','116.00','A20003','A40003','A50003','A30003','A30004','A20004','A40004','A50004','A20001','A40001','A50001'
-		,'A30001','A40002','A50002','A30002','A20002','C90015','C90011','C90007','C90006','C90014','C90010','C90021','C90020','116.00'
-		,'C90003','C90002','110.00','119.00','133.01','116.03','110.04','133.00','132.00','110.03','110.02','110.01','132.02','116.021'
-		))
-		--and App_DtTm >= (select isnull(dateadd(d,0,min(Dx_DtTm)),'1900-01-01') from Medical where Diagnosis_Class = 1  and pat_id1=Schedule.Pat_ID1)  -- and Dx_DtTm is not null
-	--group by s.Pat_ID1, e.groupID
-	*/
+
 	) A 
 WHERE roww = 1
 
-/*
-SELECT Staff.Staff_ID,
-			ltrim(rtrim(Staff.First_Name) +' '+replace(ltrim(substring(Staff.Last_Name, 1,charindex(' ',Staff.Last_Name)-1)),',','')) as OncName,
-			--(RTRIM(Staff.First_Name) + ' ' + RTRIM(Staff.Last_Name)) AS OncName, 
-			Ext_ID.ID_Code AS OncAHPRA
-		FROM Staff with (nolock)
-			LEFT OUTER JOIN Ext_ID with (nolock) ON Staff.Staff_ID = Ext_ID.Staff_ID
-		WHERE Ext_ID.Ext_Type = 'ST LICENSE'
-*/	 
 
+--Updates all consult dates most recent consult appt. Validated by Lara
 update a
 set a.ConsultationDate = b.Act_DtTm1
 from #omis a 
 	join #consultation b on a.Pat_ID1 = b.Pat_ID1 and a.GroupID = b.GroupID 
 --where a.EpisodeStartDate < a.ConsultationDate 
+
+-- 
+select Pat_ID1, groupID, OncName, OncAHPRA
+into #drfix
+From 
+(
+Select 
+s.Pat_ID1, 
+e.groupID,
+ISNULL(ltrim(rtrim(staff.First_Name) +' '+replace(ltrim(substring(staff.Last_Name, 1,charindex(' ',staff.Last_Name)-1)),',','')),'') as OncName,
+ISNULL(Ext_ID.ID_Code, '') AS OncAHPRA, staff.type as staff_type, 
+ROW_NUMBER () over (partition by s.Pat_ID1, e.groupID
+order by priority desc, len(Ext_ID.ID_Code) desc, s.App_DtTm desc) as roww, ISNULL(priority, 0) as priority
+
+From Schedule s
+join staff on s.Staff_ID= Staff.Staff_ID AND	( staff.Type LIKE 'Med Onc' 	OR   staff.Type  LIKE 'Haem' OR  staff.Type  LIKE 'Gynae Onc'	) 
+JOIN Ext_ID with (nolock) ON staff.Staff_ID = Ext_ID.Staff_ID AND Ext_Type = 'AHPRA'
+join (select pat_id1, groupID, min(EpisodeStartDate) as dx_dttm,  isnull(min(NotificationEpisodeChemoStartDate),getdate()) as NotificationEpisodeChemoStartDate from #omis group by pat_id1, groupid) e on e.Pat_ID1 = s.Pat_ID1 and cast(s.App_DtTm as date) >= dateadd(yy,-1,e.dx_dttm) and cast(s.App_DtTm as date) <= e.dx_dttm
+join dbo.Schedule_ScheduleStatus_MTM ssm with (nolock) on s.Sch_ID = ssm.Sch_ID 
+join dbo.ScheduleStatus ss with (nolock) on ssm.ScheduleStatusID = ss.ScheduleStatusID and ss.SystemDefined = 1  and ss.ScheduleStatusID = 9 -- = charge
+left outer join (Select Hsp_Code, '1' as priority From CPT 
+					Where 
+						  (Description LIKE '%New%'	
+						  OR Description LIKE '%Init%'
+						  OR Description LIKE '%Forced%')
+						  ) as act ON s.Activity = act.Hsp_Code
+Where --s.Pat_ID1 = 13189
+ s.version =0
+ ) drfix
+Where roww = 1 
+
+
+--Updates Blank AHPRA/Dr Name to the Dr of the initial consult. (there are issues but better thans blank) to be tested.
+
+update a
+set a.AmoRegReferringNumber = '*'+b.OncAHPRA, a.DoctorName = '*'+b.OncName
+from #omis a 
+	join #drfix b on a.Pat_ID1 = b.Pat_ID1 and a.GroupID = b.GroupID 
+where 
+ISNULL(a.AmoRegReferringNumber, '') = '' 
+OR ISNULL(a.DoctorName, '') = ''
 
 
 update #omis
@@ -1708,16 +1733,28 @@ where a.EpisodeStartDate < a.EpisodeEndDate
 update #omis
 set EpisodeEndDate = null, AntiNeoplasticCycles = null
 where EpisodeEndDate > @enddate or EpisodeEndDate = '' or EpisodeEndDate is null
-/*
-update o
-set o.DoctorName  = c.OncName, o.AmoRegReferringNumber = c.OncAHPRA
-from #omis o
-	join #consultation c on o.Pat_ID1 = c.Pat_ID1  and o.groupID = c.groupID 
-where  o.DoctorName is null or o.DoctorName = '' or o.DoctorName  in ('--- ---','ONCOLOGIST MEDICAL') 
+
+/*Mulitple Dx Check
+This is to flag if more than one Diagnosis found and the codes for DM check
 */
 
---Select * From #omis
- 
+Select pt_list.Pat_ID1, pt_list.groupid
+,
+'ICD List'=
+STUFF((SELECT ',' + topog.Diag_Code 
+FROM 
+Medical 
+Left outer join Topog ON Medical.TPG_ID = Topog.TPG_ID 
+Where pt_list.Pat_ID1 = Medical.PAT_ID1
+AND Medical.Status_Enum <> 1
+FOR XML PATH ('')), 1, 1, ''
+)
+INTO #dx_Flag
+FROM (Select distinct Pat_ID1, groupid from #omis) as pt_list
+
+
+
+
 if object_id('tempdb..#omis_final') is not null
  drop table #omis_final
 
@@ -1815,7 +1852,7 @@ Where 1=1
 
 --Final Query selected #omis_final
 ( 
-select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID 
+select distinct isnull(cast(#omis_final.GroupID  as varchar(11)),'') as GroupID 
 	, isnull(cast(MedicareNumber  as varchar(12)),'') as MedicareNumber 
 	, isnull(cast(MRN  as varchar(20)),'') as MRN 
 	, isnull(cast([UniqueIdentifier]  as varchar(20)),'') as [UniqueIdentifier] 
@@ -1884,7 +1921,9 @@ select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID
 	, isnull(replace(right('0'+convert(varchar(10),ReferalToPalliativeCareDate , 103),10),'/',''),'') as ReferalToPalliativeCareDate
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(1)),'') as PerformanceStatus 
-from #omis_final  )
+	,isnull(cast(#dx_flag.[ICD LIST] as varchar(60)),'') as ICDList 
+from #omis_final 
+Left Outer Join #dx_flag ON #omis_final.GroupID = #dx_flag.groupid)
 
 
 
