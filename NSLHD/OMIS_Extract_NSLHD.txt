@@ -39,6 +39,7 @@
 
 			Updated script to support DRUG level reporting for all Treatments.
 			Uncommented out drugs.regimen_cycle_number AS NotificationEpisodeChemoCycle  this appears to be an error.
+*20240108:		Updated Route Mapping.
 
 **********************************************************************************************************************************/
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
@@ -162,9 +163,15 @@ insert into @stagegroup values ('REVIEW','REVIEW')
 
 
 -- update 20180831
-insert into @drugadminroute values (18,2876)
-insert into @drugadminroute values (8,3883)
-insert into @drugadminroute values (13,7115)
+insert into @drugadminroute values (12,701)           --Inhalation                    
+insert into @drugadminroute values (98,706)           --Ophthalmic                    
+insert into @drugadminroute values (18,2876)          --Subcut
+insert into @drugadminroute values (8,3883)           --IV                            
+insert into @drugadminroute values (2,6515)           --IM                            
+insert into @drugadminroute values (1,7031)           --CIV                           
+insert into @drugadminroute values (13,7115)           --Oral                          
+insert into @drugadminroute values (98,15901)          --Injection
+
  
 
 insert into @episodeintent values (9,'BMT Regimen')
