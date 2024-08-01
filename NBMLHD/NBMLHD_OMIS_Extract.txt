@@ -18,7 +18,7 @@ There are three main queries
 ****Updates *****
 * 20230516 version v0.1 completed using mappings from scoping excel.
 * 20231115 version 1.0 updated MDT date and confimed consult mapping.
-*
+* 20240801 updated extract with ExtractDate to match new OMIS pipeline specs.
 *
 *
 *
@@ -30,13 +30,13 @@ SET ANSI_WARNINGS OFF
 --use [MOSAIQREPORT]
 --go 
  
-declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1)
+declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @ExtractDate date
 
 set @startdate = '&[ReportingStartDate]&'		-- start of month
 set @enddate = '&[ReportingEndDate]&'			-- end of month
 set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
-
+set @ExtractDate = GETDATE()
 
 
 set @debug = @QA
@@ -1845,6 +1845,7 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,   dx_record_Create_DtTm
 	,   dx_record_Sanct_DtTm
 	,   dx_record_Edit_DtTm
+	, @ExtractDate as ExtractDate
 into #omis_final
 from #omis 
 Where 1=1
@@ -1922,6 +1923,7 @@ select distinct isnull(cast(#omis_final.GroupID  as varchar(11)),'') as GroupID
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(1)),'') as PerformanceStatus 
 	,isnull(cast(#dx_flag.[ICD LIST] as varchar(60)),'') as ICDList 
+	, #omis_final.ExtractDate
 from #omis_final 
 Left Outer Join #dx_flag ON #omis_final.GroupID = #dx_flag.groupid)
 
