@@ -1736,7 +1736,7 @@ where EpisodeEndDate > @enddate or EpisodeEndDate = '' or EpisodeEndDate is null
 
 /*Mulitple Dx Check
 This is to flag if more than one Diagnosis found and the codes for DM check
-*/
+
 
 Select pt_list.Pat_ID1, pt_list.groupid
 ,
@@ -1752,7 +1752,7 @@ FOR XML PATH ('')), 1, 1, ''
 INTO #dx_Flag
 FROM (Select distinct Pat_ID1, groupid from #omis) as pt_list
 
-
+*/
 
 
 if object_id('tempdb..#omis_final') is not null
@@ -1922,11 +1922,11 @@ select distinct isnull(cast(#omis_final.GroupID  as varchar(11)),'') as GroupID
 	, isnull(replace(right('0'+convert(varchar(10),ReferalToPalliativeCareDate , 103),10),'/',''),'') as ReferalToPalliativeCareDate
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(1)),'') as PerformanceStatus 
-	,isnull(cast(#dx_flag.[ICD LIST] as varchar(60)),'') as ICDList 
+	--,isnull(cast(#dx_flag.[ICD LIST] as varchar(60)),'') as ICDList 
 	, #omis_final.ExtractDate
 from #omis_final 
-Left Outer Join #dx_flag ON #omis_final.GroupID = #dx_flag.groupid)
-
+--Left Outer Join #dx_flag ON #omis_final.GroupID = #dx_flag.groupid)
+)
 
 
 
