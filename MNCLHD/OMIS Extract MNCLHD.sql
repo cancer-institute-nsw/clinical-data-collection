@@ -1,11 +1,10 @@
 
 /************************************************************************************************************
-* Description: 	OMIS extract - Mosaiq - Coffs Harbour
+* Description: 	OMIS extract - Mosaiq - All Facilities
 * Version:	1.1
 * Author:	William Su
-* Hospital code: H208, facility code: C070
 * 
-* BRAD NOTE: This script must be run one facility at a time
+* BRAD NOTE: This script will run for all facilities.
 * 
 * Updates	
 * 20171020: updated 
@@ -30,13 +29,13 @@
 * 20180418: remove date param for initial_treatment, update ClinicalTrialName, added space in WayfareAddress, 
 * 20180612: remove commas in names
 * 20180704: added @eviq: eviq and 1570/1571 map for retrospective and prospective protocol number mapping.
-* 20180705: @eviq split for trials. Episode end date update to last completed treatment date.
+* 20180705: @eviq_final split for trials. Episode end date update to last completed treatment date.
 * 20180706: resolve collation for @eviq
 * 20180710: episode start/end date updated to actual first/last day of administration for chemo/antineoplastic drugs.
 * 20180725: first and last actual admin date updated to group id level, episode updated to consider diagnose and plan start date, episode end date to consider discontinue date. 
 			AntiNeoplasticCycles to inline with last admin cycle.
 * 20180727: added test patient surname filter
-* 20180731: update @eviq mappings logic
+* 20180731: update @eviq_final mappings logic
 * 20180801: trial date update to reg date not start date, remove chemo drug type ref for first/last admin date
 * 20180808: update last admin date logic to < (@enddate - cycle length*2), remove reference to discontinue/plan end date. Antineoplastic cycle in line with last admin date
 			@enddate set to today if in the future, last admin date logic remove "approved" status, first/last admin date updated status types
@@ -44,38 +43,26 @@
 * 20180824: null 1 char alias name and givenname2
 * 20180903: default degreeofspead to 9
 * 20190919: added schedule.version = 0
-* 28092021: -- BRAD NOTE - I have doubled the size of the allowed variables for all table components for lines 1875 and 1876 - "declare @eviq table" and "declare @eviq2 table" as the report was complaining about having to truncate some collected data		
+* 28092021: BRAD NOTE - I have doubled the size of the allowed variables for all table components for lines 1875 and 1876 - "declare @eviq_final table" and "declare @eviq_source table" as the report was complaining about having to truncate some collected data		
+* 20240801: Removed the Degug/QA sections as rules outdated.
+			Added Extract Date variable
+			Consolidate Drug reporting branches to report drugs for all patients/protocols. To view/audit all Eviq Protocol Mapping us script  " Select eviq_source From @eviq_final INNER JOIN @eviq_source on [@eviq_source].CPL_ID = [@eviq_final].CPL_ID "
+			Checked/Updated Facility logic - To confirm extract runs for all facilities no need to enter facility codes any more, I have removed these.
+											-The script has been detecting the highest frequency department per patient for the reporting period. This has not changed
+											- But I have moved the logic into a tabel variabel @PatientLocation to increase performance.
  **************************************************************************************************************/
+ 
+declare @startdate date, @enddate date,  @ExtractDate date
+-- @showfilenameonly varchar(1) @hosp_code varchar(10), @facility_code varchar(10) , @hospital varchar(20) ,@debug char(1) -- no longer needed.
 
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SET nocount on
+SET ANSI_WARNINGS OFF
 
-declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showfilenameonly varchar(1), @hosp_code varchar(10), @facility_code varchar(10)
+set @startdate = '2024-01-01'		-- start of month
+set @enddate = '2024-01-01'			-- end of month
+set @ExtractDate = getdate()
 
-set @startdate = '2022-10-01'		-- start of month
-set @enddate = '2022-12-31'			-- end of month
--- BRAD NOTE: Multiple Hospital codes may be run at once
-set @hosp_code = ('''H208'', ''H214'', ''H223'', ''H210'', ''H272''')    -- BRAD NOTE: MNC and NNSW hospital codes: Coffs = ''H208'', Port = ''H272'', Tweed = ''H223'', Grafton = ''H210'', Lismore ''H214''
-set @QA = 'n'						-- Y = QA mode, N = final output for upload to CI
-set @showfilenameonly = 'n'				-- Y = show output file name only, N = run main code
-   
-
-
-set nocount on
-
--- BRAD NOTE: I don't know why the below line is commented out
---set @hosp_code = 'H208'				-- Hospital code:   
--- BRAD NOTE: Multiple Facilitie Codes may be run at once
-set @facility_code = ('''H208'', ''H214'', ''H223'', ''H210'', ''H272''') -- BRAD NOTE: MNC and NNSW facility codes: CH MO: ''H933'', PB MO: ''H934'', LB MO: ''F298'', TH MO: ''H981'', GB MO: ''H982''
-
-set @debug = @QA
-
-declare @dt varchar(12)
-
-if @showfilenameonly = 'Y'
-begin
-	set @dt = right('0'+cast(datepart(d, getdate()) as varchar(2)),2)+right('0'+cast(datepart(m, getdate()) as varchar(2)),2)+right('0'+cast(datepart(yyyy, getdate()) as varchar(4)),4)+right('0'+cast(datepart(hh, getdate()) as varchar(2)),2)+right('0'+cast(datepart(mi, getdate()) as varchar(2)),2) 
-	select 'MEDONC_'+@hosp_code+'_'+@dt+'.csv' as Output_File_Name
-	return;
-end 
 if  @enddate > cast(getdate() as date)
   set @enddate = cast(getdate() as date)
 
@@ -88,6 +75,7 @@ declare @laterality table (code varchar(3), name varchar(200))
 declare @episodeintent table (code varchar(3), name varchar(200))
 declare @drugadminroute table (code int, name int)
 declare @stagegroup table (name varchar(20))
+
 
 insert into @stagegroup values ('0')
 insert into @stagegroup values ('0a')
@@ -906,9 +894,46 @@ insert into @countries values (8434,'Curacao')
 insert into @countries values (8435,'Sint Maarten (Dutch part)')
 
 
+/******************Patient Location Mapping***********************/
+-- The script has been using the most frequent inst_id of scheduled appts to map the patient location/deaprtment for treatment. As orders are not always reliable.
+-- This has been moved to a temp tabel to improve performance.
+
+-- Declare the table variable
+DECLARE @PatientLocation TABLE (
+    Pat_Id1 INT,
+    Inst_ID INT
+);
+
+-- Insert data into @PatientLocation
+INSERT INTO @PatientLocation (Pat_Id1, Inst_ID)
+SELECT Pat_Id1, Inst_ID
+FROM (
+    SELECT 
+        Pat_ID1, 
+        Inst_ID, 
+        COUNT(Inst_ID) AS total, 
+        ROW_NUMBER() OVER (PARTITION BY Pat_ID1 ORDER BY COUNT(Inst_ID) DESC) AS row
+    FROM 
+        schedule WITH (NOLOCK)
+        JOIN Staff WITH (NOLOCK) ON Schedule.Location = Staff.Staff_ID
+    WHERE 
+        schedule.version = 0
+        AND schedule.App_DtTm <= CONVERT(DATETIME, @enddate)
+        AND schedule.App_DtTm >= CONVERT(DATETIME, DATEADD(day, -180, @startdate)) 
+        AND Pat_ID1 > 10000
+        AND Schedule.Suppressed = 0
+    GROUP BY 
+        Pat_ID1, Inst_ID
+) AS recs
+WHERE row = 1;
+
+-- Uncomment this part if you need to use the result
+-- SELECT * FROM @PatientLocation;
+
+
 if object_id('tempdb..#omis') is not null
  drop table #omis
- 
+
 
 SELECT DISTINCT TreatmentEvents.Pat_ID1, 
 	TreatmentEvents.PCP_GROUP_ID AS GroupID, 
@@ -1146,15 +1171,11 @@ FROM
 					RTRIM(Config.City) AS locality, 
 					Config.State_Province, 
 					Config.Postal, 
-					Config.Display_ID ,
+					Config.Display_ID,
 					config.pager
-				from (select Pat_ID1, Inst_ID, COUNT(Inst_ID) AS total, ROW_NUMBER() OVER (PARTITION BY Pat_ID1 ORDER BY COUNT(Inst_ID) DESC ) AS row
-						FROM schedule with (nolock), Staff with (nolock)
-						where Schedule.Location = Staff.Staff_ID
-							and schedule.version = 0
-						group by Pat_ID1, Inst_ID
+				from (Select Pat_ID1, Inst_ID from @PatientLocation
 					) AS attendance_table_2
-					join Config with (nolock) on Config.Inst_ID = attendance_table_2.Inst_ID and attendance_table_2.row = 1 
+					join Config with (nolock) on Config.Inst_ID = attendance_table_2.Inst_ID 
 			) AS TreatmentLocation ON TreatmentLocation.Pat_ID1 = patient_care_plan.Pat_ID1
 		LEFT OUTER JOIN
 		(select  PCP_Group_ID,  1 AS row  --p.Pat_ID1, p.MED_ID,
@@ -1869,47 +1890,47 @@ set @enddate = '2017-05-31'			-- end of month
  
 --if object_id('tempdb..@eviq') is not null 
 --  drop table @eviq
---if object_id('tempdb..@eviq2') is not null 
---  drop table @eviq2
+--if object_id('tempdb..@eviq_source') is not null 
+--  drop table @eviq_source
   
-declare @eviq table (cplanname varchar(300), regimen varchar(300), map_protocol varchar(40)) -- BRAD NOTE - I have doubled the size of the allowed variables fr all table components
-declare @eviq2 table (cplanname varchar(300), regimen varchar(300), map_protocol varchar(40)) -- BRAD NOTE - I have doubled the size of the allowed variables fr all table components
+declare @eviq_final table (CPL_ID int, cplanname varchar(300), regimen varchar(300), map_protocol varchar(40)) -- BRAD NOTE - I have doubled the size of the allowed variables fr all table components
+declare @eviq_source table (CPL_ID int, cplanname varchar(300), regimen varchar(300), map_protocol varchar(40)) -- BRAD NOTE - I have doubled the size of the allowed variables fr all table components
  
-insert into @eviq2
-select distinct cplan_name as cplanname, regimen, cast('0' as  varchar(20)) as map_protocol from cplan
+insert into @eviq_source
+select distinct CPL_ID, cplan_name as cplanname, regimen, cast('0' as  varchar(20)) as map_protocol from cplan
     
-insert into @eviq
-select cplanname, regimen, cast(regimen as varchar(20)) as regimen from @eviq2 where isnumeric(regimen) = 1 
+insert into @eviq_final
+select CPL_ID, cplanname, regimen, cast(regimen as varchar(20)) as regimen from @eviq_source where isnumeric(regimen) = 1 
 union all
-select cplanname, regimen, substring(regimen,1,charindex('v',regimen)-1) from @eviq2 where cplanname like '%eviq%' and isnumeric(regimen) < 1 and  regimen  LIKE '[<+0-9]%v[0-9]'
+select CPL_ID, cplanname, regimen, substring(regimen,1,charindex('v',regimen)-1) from @eviq_source where cplanname like '%eviq%' and isnumeric(regimen) < 1 and  regimen  LIKE '[<+0-9]%v[0-9]'
 union all
-select cplanname, regimen
+select CPL_ID, cplanname, regimen
 	 , case when charindex(' ',ltrim(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq',''),'.',''),'#',''),'*',''))) > 0
 		then cast(substring(ltrim(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq',''),'.',''),'#',''),'*','')),1,charindex(' ',ltrim(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq',''),'.',''),'#',''),'*','')))) as varchar(20))
 		else cast(ltrim(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq',''),'.',''),'#',''),'*','')) as varchar(20))
 		end  
-	 from @eviq2 where cplanname like '%eviq%' and isnumeric(regimen) < 1 and regimen not LIKE '[<+0-9]%v[0-9]' and cplanname not like '%eviq id%'
+	 from @eviq_source where cplanname like '%eviq%' and isnumeric(regimen) < 1 and regimen not LIKE '[<+0-9]%v[0-9]' and cplanname not like '%eviq id%'
 union all
-select cplanname , regimen
+select CPL_ID, cplanname , regimen
 	, case when charindex(' ',ltrim(replace(replace(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq id',''),'.',''),'#',''),'*',''),'/',' '),':',' '))) > 0
 		then cast(substring(ltrim(replace(replace(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq id',''),'.',''),'#',''),'*',''),'/',' '),':',' ')),1,charindex(' ',ltrim(replace(replace(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq id',''),'.',''),'#',''),'*',''),'/',' '),':',' ')))) as  varchar(20))
 		else cast(ltrim(replace(replace(replace(replace(replace(replace(substring(cplanname,charindex('evi',cplanname),18),'eviq id',''),'.',''),'#',''),'*',''),'/',' '),':',' ')) as  varchar(20))
 		end  
-	  from @eviq2 where cplanname like '%eviq%' and isnumeric(regimen) < 1 and regimen not LIKE '[<+0-9]%v[0-9]' and cplanname like '%eviq id%'
+	  from @eviq_source where cplanname like '%eviq%' and isnumeric(regimen) < 1 and regimen not LIKE '[<+0-9]%v[0-9]' and cplanname like '%eviq id%'
 union all
-select cplanname, regimen, '1570' from @eviq2 where isnumeric(regimen) < 1 and   cplanname not like '%eviq%'and  cplanname not like '% trial%' 
+select CPL_ID, cplanname, regimen, '1570' from @eviq_source where isnumeric(regimen) < 1 and   cplanname not like '%eviq%'and  cplanname not like '% trial%' 
 union all
-select cplanname, regimen, '1571' from @eviq2 where isnumeric(regimen) < 1 and   cplanname not like '%eviq%' and  cplanname like '% trial%' 
+select CPL_ID, cplanname, regimen, '1571' from @eviq_source where isnumeric(regimen) < 1 and   cplanname not like '%eviq%' and  cplanname like '% trial%' 
 
-update @eviq
+update @eviq_final
 set map_protocol = replace(replace(map_protocol,'_',''),'ak','')
 where isnumeric(map_protocol) < 1
 
-update @eviq
+update @eviq_final
 set map_protocol = substring(map_protocol,1,charindex(map_protocol,'v')-1)
 where isnumeric(map_protocol) < 1 and charindex(map_protocol,'v') > 1
   
-update @eviq
+update @eviq_final
 set map_protocol = '1570'
 where isnumeric(map_protocol) < 1
    
@@ -1991,1128 +2012,24 @@ select distinct	GroupID
 	,	ReferalToPalliativeCareDate
 	,	PerformanceStatusDate
 	,	PerformanceStatus
-	,	CPL_ID
+	,	o.CPL_ID
 	,	o.CPlan_Name
 	,	o.Regimen
 into #omis_final
 from #omis o
-	join @eviq e on o.CPlan_Name = e.CPlanName and o.Regimen = e.regimen
-where e.map_protocol in (1570,1571)
-	and rtrim(Surname) not in ('AAA', 'ZZ', 'ZGr','ZCH','ZPB','ZLB','ZTH','Installer','TOBEDELETED')
---where (ProtocolID = '1570' or   isnumeric(ProtocolID) = 0) and   ProtocolID not like 'ID%'   --and ProtocolID <> '1570' 
-	--and TreatingFacilityCode = @hosp_code
-union all
-select distinct	GroupID
-	,	MedicareNumber
-	,	MRN
-	,	[UniqueIdentifier]
-	,	GivenName1
-	,	GivenName2
-	,	Surname
-	,	AliasSurname 
-	,	Sex
-	,	DateOfBirth
-	,	Birth_Place_original
-	,	COBCodeSACC
-	,	WayfareAddress
-	,	Locality
-	,	Postcode
-	,	WayfareStateID_original
-	,	WayfareStateID
-	,	IndigenousStatusID_original
-	,	IndigenousStatusID
-	,	AmoRegReferringNumber
-	,	DoctorName
-	,	TreatingFacilityCode
-	,	FacilityCode
-	,	DateOfDiagnosis
-	,	CancerSiteCodeID
-	,	CancerSiteCodeIDVersion
-	,   MorphologyCodeIDVersion
-	,	BestBasisOfDiagnosisID_original
-	,	BestBasisOfDiagnosisID
-	,	Laterality_original
-	,	Laterality
-	,	HistopathologicalGradeID
-	,	MorphologyCodeID
-	,	DegreeOfSpreadID
-	,	TNMStagingDate
-	,	TStageID_original
-	,	NStageID_original
-	,	MStageID_original
-	,	TStageID
-	,	NStageID
-	,	MStageID
-	,	TNMStagingGroupID
-	,	TNMStagingBasisID
-	,	OtherStagingDate
-	,	OtherStagingSchemeID
-	,	OtherStagingGroupID
-	,	OtherStagingBasisID
-	,	EpisodeIntentID_original
-	,	EpisodeIntentID
-	,	InitialTreatmentFlag
-	,	EpisodeStartDate
-	,	EpisodeEndDate
-	,	AntiNeoplasticCycles
-	--,	substring(ProtocolID,1,6) as ProtocolID
-	,	e.map_protocol  as ProtocolID
-	,	null as NotificationEpisodeChemoCycle
-	,	null as OMISDrugName
-	,	null as NotificationEpisodeChemoDose
-	,	null as NotificationEpisodeChemoRouteID_original
-	,	null as NotificationEpisodeChemoRouteID
-	,	null as NotificationEpisodeChemoStartDate
-	,	null as NotificationEpisodeChemoEndDate
-	,	null as NotificationEpisodeChemoFrequency
-	,	null as NotificationEpisodeChemoFrequencyUnit
-	,	null as NotificationEpisodeChemoDay
-	,	ReferralDate
-	,	ConsultationDate
-	,	ClinicalTrialDate
-	,	ClinicalTrialName
-	,	MDTDate
-	,	ReferalToPalliativeCareDate
-	,	PerformanceStatusDate
-	,	PerformanceStatus
-	,	o.CPL_ID
-	,	o.CPlan_Name
-	,	o.Regimen
-from #omis o
-	join @eviq e on o.CPlan_Name = e.CPlanName and o.Regimen = e.regimen
-where e.map_protocol not in (1570,1571)
-	and rtrim(Surname) not in ('AAA', 'ZZ', 'ZGr','ZCH','ZPB','ZLB','ZTH','Installer','TOBEDELETED')
---where  ProtocolID <> '1570' and  ProtocolID like 'ID%'   
-	--and TreatingFacilityCode = @hosp_code
- 
+	join @eviq_final e on o.CPlan_Name = e.CPlanName and o.Regimen = e.regimen
+where 
+	--	e.map_protocol in (1570,1571) -- removed as drugs reported for all proctocols.
+	 rtrim(Surname) not in ('AAA', 'ZZ', 'ZGr','ZCH','ZPB','ZLB','ZTH','Installer','TOBEDELETED')
 
 -- select * from #omis_final
 
 
 /****************************************************************************************************************************************************************************************/
- 
-/* 
-declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20)
-set @startdate = '2017-01-01'		-- start of month
-set @enddate = '2017-01-31'			-- end of month
-set  @hosp_code = 'H208'
-set @debug = 'Y'					-- Y = show real dates, N = DDMMYYYY
-*/
 
-if object_id('tempdb..#omis_debug') is not null
- drop table #omis_debug
- 
-if @debug = 'Y' 
-begin
-
-select GroupID
-	,	case when len(GroupID) > 11 then d_GroupID+' |value > 11 characters' else d_GroupID end as d_GroupID
-	,	MedicareNumber
-	,	case when len(MedicareNumber) > 12 then d_MedicareNumber+' |value > 12 characters' else d_MedicareNumber end as d_MedicareNumber
-	,	MRN
-	,	case when len(MRN) > 20 then d_MRN+' |value > 20 characters' else d_MRN end as d_MRN
-	,	UniqueIdentifier
-	,	case when len(UniqueIdentifier) > 20 then d_UniqueIdentifier+' |value > 20 characters' else d_UniqueIdentifier end as d_UniqueIdentifier
-	,	GivenName1
-	,	case when len(GivenName1) > 40 then d_GivenName1+' |value > 40 characters' else d_GivenName1 end as d_GivenName1
-	,	GivenName2
-	,	case when len(GivenName2) > 40 then d_GivenName2+' |value > 40 characters' else d_GivenName2 end as d_GivenName2
-	,	Surname
-	,	case when len(Surname) > 40 then d_Surname+' |value > 40 characters' else d_Surname end as d_Surname
-	,	AliasSurname
-	,	case when len(AliasSurname) > 40 then d_AliasSurname+' |value > 40 characters' else d_AliasSurname end as d_AliasSurname
-	,	Sex
-	,	case when len(Sex) > 1 then d_Sex+' |value > 1 characters' else d_Sex end as d_Sex
-	,	DateOfBirth
-	,	case when isdate(DateOfBirth) > 0 and DateOfBirth >= dateadd(dd,-1,getdate()) then d_DateOfBirth+' |value > today' else d_DateOfBirth  end as d_DateOfBirth
-	,	Birth_Place_original
-	,	d_Birth_Place_original
-	,	COBCodeSACC
-	,	case when len(COBCodeSACC) > 4 then d_COBCodeSACC+' |value > 4 characters' else d_COBCodeSACC end as d_COBCodeSACC
-	,	WayfareAddress
-	,	case when len(WayfareAddress) > 180 then d_WayfareAddress+' |value > 180 characters' else d_WayfareAddress end as d_WayfareAddress
-	,	Locality
-	,	case when len(Locality) > 40 then d_Locality+' |value > 40 characters' else d_Locality end as d_Locality
-	,	Postcode
-	,	case when len(Postcode) > 4 then d_Postcode+' |value > 4 characters' else d_Postcode end as d_Postcode
-	,	WayfareStateID_original
-	,	d_WayfareStateID_original
-	,	WayfareStateID
-	,	case when len(WayfareStateID) > 2 then d_WayfareStateID+' |value > 2 characters' else d_WayfareStateID end as d_WayfareStateID
-	,	IndigenousStatusID_original
-	,	d_IndigenousStatusID_original
-	,	IndigenousStatusID
-	,	case when len(IndigenousStatusID) > 1 then d_IndigenousStatusID+' |value > 1 characters' else d_IndigenousStatusID end as d_IndigenousStatusID
-	,	AmoRegReferringNumber
-	,	case when len(AmoRegReferringNumber) > 20 then d_AmoRegReferringNumber+' |value > 20 characters' else d_AmoRegReferringNumber end as d_AmoRegReferringNumber
-	,	DoctorName
-	,	case when len(DoctorName) > 120 then d_DoctorName+' |value > 120 characters' else d_DoctorName end as d_DoctorName
-	,	TreatingFacilityCode
-	,	case when len(TreatingFacilityCode) > 4 then d_TreatingFacilityCode+' |value > 4 characters' else d_TreatingFacilityCode end as d_TreatingFacilityCode
-	,	FacilityCode
-	,	case when len(FacilityCode) > 4 then d_FacilityCode+' |value > 4 characters' else d_FacilityCode end as d_FacilityCode
-	,	DateOfDiagnosis
-	,	case when isdate(DateOfDiagnosis) > 0 and DateOfDiagnosis >= dateadd(dd,-1,getdate()) then d_DateOfDiagnosis+' |value > today' else d_DateOfDiagnosis  end as d_DateOfDiagnosis
-	,	CancerSiteCodeID
-	,	case when len(CancerSiteCodeID) > 7 then d_CancerSiteCodeID+' |value > 7 characters' else d_CancerSiteCodeID end as d_CancerSiteCodeID
-	,	CancerSiteCodeIDVersion
-	,	case when len(CancerSiteCodeIDVersion) > 10 then d_CancerSiteCodeIDVersion+' |value > 10 characters' else d_CancerSiteCodeIDVersion end as d_CancerSiteCodeIDVersion
-	,	MorphologyCodeIDVersion
-	,	case when len(MorphologyCodeIDVersion) > 10 then d_MorphologyCodeIDVersion+' |value > 10 characters' else d_MorphologyCodeIDVersion end as d_MorphologyCodeIDVersion
-	,	BestBasisOfDiagnosisID_original
-	,	d_BestBasisOfDiagnosisID_original
-	,	BestBasisOfDiagnosisID
-	,	case when len(BestBasisOfDiagnosisID) > 1 then d_BestBasisOfDiagnosisID+' |value > 1 characters' else d_BestBasisOfDiagnosisID end as d_BestBasisOfDiagnosisID
-	,	Laterality_original
-	,	d_Laterality_original
-	,	Laterality
-	,	case when len(Laterality) > 1 then d_Laterality+' |value > 1 characters' else d_Laterality end as d_Laterality
-	,	HistopathologicalGradeID
-	,	case when len(HistopathologicalGradeID) > 1 then d_HistopathologicalGradeID+' |value > 1 characters' else d_HistopathologicalGradeID end as d_HistopathologicalGradeID
-	,	MorphologyCodeID
-	,	case when len(MorphologyCodeID) > 10 then d_MorphologyCodeID+' |value > 10 characters' else d_MorphologyCodeID end as d_MorphologyCodeID
-	,	DegreeOfSpreadID
-	,	case when len(DegreeOfSpreadID) > 1 then d_DegreeOfSpreadID+' |value > 1 characters' else d_DegreeOfSpreadID end as d_DegreeOfSpreadID
-	,	TNMStagingDate
-	,	case when isdate(TNMStagingDate) > 0 and TNMStagingDate >= dateadd(dd,-1,getdate()) then d_TNMStagingDate+' |value > today' else d_TNMStagingDate  end as d_TNMStagingDate
-	,	TStageID_original
-	,	NStageID_original
-	,	MStageID_original
-	,	TStageID
-	,	case when len(TStageID) > 50 then d_TStageID+' |value > 50 characters' else d_TStageID end as d_TStageID
-	,	NStageID
-	,	case when len(NStageID) > 50 then d_NStageID+' |value > 50 characters' else d_NStageID end as d_NStageID
-	,	MStageID
-	,	case when len(MStageID) > 50 then d_MStageID+' |value > 50 characters' else d_MStageID end as d_MStageID
-	,	TNMStagingGroupID
-	,	case when len(TNMStagingGroupID) > 50 then d_TNMStagingGroupID+' |value > 50 characters' else d_TNMStagingGroupID end as d_TNMStagingGroupID
-	,	TNMStagingBasisID
-	,	case when len(TNMStagingBasisID) > 1 then d_TNMStagingBasisID+' |value > 1 characters' else d_TNMStagingBasisID end as d_TNMStagingBasisID
-	,	OtherStagingDate
-	,	case when isdate(OtherStagingDate) > 0 and OtherStagingDate >= dateadd(dd,-1,getdate()) then d_OtherStagingDate+' |value > today' else d_OtherStagingDate  end as d_OtherStagingDate
-	,	OtherStagingSchemeID
-	,	case when len(OtherStagingSchemeID) > 2 then d_OtherStagingSchemeID+' |value > 2 characters' else d_OtherStagingSchemeID end as d_OtherStagingSchemeID
-	,	OtherStagingGroupID
-	,	case when len(OtherStagingGroupID) > 14 then d_OtherStagingGroupID+' |value > 14 characters' else d_OtherStagingGroupID end as d_OtherStagingGroupID
-	,	OtherStagingBasisID
-	,	case when len(OtherStagingBasisID) > 1 then d_OtherStagingBasisID+' |value > 1 characters' else d_OtherStagingBasisID end as d_OtherStagingBasisID
-	,	EpisodeIntentID_original
-	,	d_EpisodeIntentID_original
-	,	EpisodeIntentID
-	,	case when len(EpisodeIntentID) > 2 then d_EpisodeIntentID+' |value > 2 characters' else d_EpisodeIntentID end as d_EpisodeIntentID
-	,	InitialTreatmentFlag
-	,	case when len(InitialTreatmentFlag) > 1 then d_InitialTreatmentFlag+' |value > 1 characters' else d_InitialTreatmentFlag end as d_InitialTreatmentFlag
-	,	EpisodeStartDate
-	,	case when isdate(EpisodeStartDate) > 0 and EpisodeStartDate >= dateadd(dd,-1,getdate()) then d_EpisodeStartDate+' |value > today' else d_EpisodeStartDate  end as d_EpisodeStartDate
-	,	EpisodeEndDate
-	,	case when isdate(EpisodeEndDate) > 0 and EpisodeEndDate >= dateadd(dd,365,getdate()) then d_EpisodeEndDate+' |value > 1 year' else d_EpisodeEndDate  end as d_EpisodeEndDate
-	,	AntiNeoplasticCycles
-	,	case when len(AntiNeoplasticCycles) > 3 then d_AntiNeoplasticCycles+' |value > 3 characters' else d_AntiNeoplasticCycles end as d_AntiNeoplasticCycles
-	,	ProtocolID
-	,	case when len(ProtocolID) > 15 then d_ProtocolID+' |value > 15 characters' else d_ProtocolID end as d_ProtocolID
-	,	NotificationEpisodeChemoCycle
-	,	case when len(NotificationEpisodeChemoCycle) > 3 then d_NotificationEpisodeChemoCycle+' |value > 3 characters' else d_NotificationEpisodeChemoCycle end as d_NotificationEpisodeChemoCycle
-	,	OMISDrugName
-	,	case when len(OMISDrugName) > 512 then d_OMISDrugName+' |value > 512 characters' else d_OMISDrugName end as d_OMISDrugName
-	,	NotificationEpisodeChemoDose
-	,	case when len(NotificationEpisodeChemoDose) > 20 then d_NotificationEpisodeChemoDose+' |value > 20 characters' else d_NotificationEpisodeChemoDose end as d_NotificationEpisodeChemoDose
-	,	NotificationEpisodeChemoRouteID_original
-	,	d_NotificationEpisodeChemoRouteID_original
-	,	NotificationEpisodeChemoRouteID
-	,	case when len(NotificationEpisodeChemoRouteID) > 2 then d_NotificationEpisodeChemoRouteID+' |value > 2 characters' else d_NotificationEpisodeChemoRouteID end as d_NotificationEpisodeChemoRouteID
-	,	NotificationEpisodeChemoStartDate
-	,	case when isdate(NotificationEpisodeChemoStartDate) > 0 and NotificationEpisodeChemoStartDate >= dateadd(dd,-1,getdate()) then d_NotificationEpisodeChemoStartDate+' |value > today' else d_NotificationEpisodeChemoStartDate  end as d_NotificationEpisodeChemoStartDate
-	,	NotificationEpisodeChemoEndDate
-	,	case when isdate(NotificationEpisodeChemoEndDate) > 0 and NotificationEpisodeChemoEndDate >= dateadd(dd,-1,getdate()) then d_NotificationEpisodeChemoEndDate+' |value > today' else d_NotificationEpisodeChemoEndDate  end as d_NotificationEpisodeChemoEndDate
-	,	NotificationEpisodeChemoFrequency
-	,	case when len(NotificationEpisodeChemoFrequency) > 2 then d_NotificationEpisodeChemoFrequency+' |value > 2 characters' else d_NotificationEpisodeChemoFrequency end as d_NotificationEpisodeChemoFrequency
-	,	NotificationEpisodeChemoFrequencyUnit
-	,	case when len(NotificationEpisodeChemoFrequencyUnit) > 1 then d_NotificationEpisodeChemoFrequencyUnit+' |value > 1 characters' else d_NotificationEpisodeChemoFrequencyUnit end as d_NotificationEpisodeChemoFrequencyUnit
-	,	NotificationEpisodeChemoDay
-	,	case when len(NotificationEpisodeChemoDay) > 15 then d_NotificationEpisodeChemoDay+' |value > 15 characters' else d_NotificationEpisodeChemoDay end as d_NotificationEpisodeChemoDay
-	,	ReferralDate
-	,	case when isdate(ReferralDate) > 0 and ReferralDate >= dateadd(dd,-1,getdate()) then d_ReferralDate+' |value > today' else d_ReferralDate  end as d_ReferralDate
-	,	ConsultationDate
-	,	case when isdate(ConsultationDate) > 0 and ConsultationDate >= dateadd(dd,-1,getdate()) then d_ConsultationDate+' |value > today' else d_ConsultationDate  end as d_ConsultationDate
-	,	ClinicalTrialDate
-	,	case when isdate(ClinicalTrialDate) > 0 and ClinicalTrialDate >= dateadd(dd,-1,getdate()) then d_ClinicalTrialDate+' |value > today' else d_ClinicalTrialDate  end as d_ClinicalTrialDate
-	,	ClinicalTrialName
-	,	case when len(ClinicalTrialName) > 100 then d_ClinicalTrialName+' |value > 100 characters' else d_ClinicalTrialName end as d_ClinicalTrialName
-	,	MDTDate
-	,	case when isdate(MDTDate) > 0 and MDTDate >= dateadd(dd,-1,getdate()) then d_MDTDate+' |value > today' else d_MDTDate  end as d_MDTDate
-	,	ReferalToPalliativeCareDate
-	,	case when isdate(ReferalToPalliativeCareDate) > 0 and ReferalToPalliativeCareDate >= dateadd(dd,-1,getdate()) then d_ReferalToPalliativeCareDate+' |value > today' else d_ReferalToPalliativeCareDate  end as d_ReferalToPalliativeCareDate
-	,	PerformanceStatusDate
-	,	case when isdate(PerformanceStatusDate) > 0 and PerformanceStatusDate >= dateadd(dd,-1,getdate()) then d_PerformanceStatusDate+' |value > today' else d_PerformanceStatusDate  end as d_PerformanceStatusDate
-	,	PerformanceStatus
-	,	case when len(PerformanceStatus) > 1 then d_PerformanceStatus+' |value > 1 characters' else d_PerformanceStatus end as d_PerformanceStatus
-	,	CPL_ID
-	,	CPlan_Name
-	,	Regimen
-into #omis_debug
-from (select	GroupID
-		,	case when len(GroupID) > 0 and isnumeric(GroupID)=0 then d_GroupID +' |value not numeric' else d_GroupID end as d_GroupID
-		,	MedicareNumber
-		,	case when len(MedicareNumber) > 0 and isnumeric(MedicareNumber)< 1 then d_MedicareNumber +' |value not numeric' else d_MedicareNumber end as d_MedicareNumber
-		,	MRN
-		,	d_MRN
-		,	UniqueIdentifier
-		,	d_UniqueIdentifier
-		,	GivenName1
-		,	d_GivenName1
-		,	GivenName2
-		,	d_GivenName2
-		,	Surname
-		,	d_Surname
-		,	AliasSurname
-		,	d_AliasSurname
-		,	Sex
-		,	case when len(Sex) > 0 and isnumeric(Sex)=0 then d_Sex+' |value not numeric' else d_Sex end as d_Sex
-		,	DateOfBirth
-		,	case when len(DateOfBirth) > 0 and isdate(DateOfBirth)=0 then d_DateOfBirth+' |value not numeric' else d_DateOfBirth end as d_DateOfBirth
-		,	Birth_Place_original
-		,	d_Birth_Place_original
-		,	COBCodeSACC
-		,	case when len(COBCodeSACC) > 0 and isnumeric(COBCodeSACC)=0 then d_COBCodeSACC+' |value not numeric' else d_COBCodeSACC end as d_COBCodeSACC
-		,	WayfareAddress
-		,	d_WayfareAddress
-		,	Locality
-		,	d_Locality
-		,	Postcode
-		,	case when len(Postcode) > 0 and isnumeric(Postcode)=0 then d_Postcode+' |value not numeric' else d_Postcode end as d_Postcode
-		,	WayfareStateID_original
-		,	d_WayfareStateID_original
-		,	WayfareStateID
-		,	case when len(WayfareStateID) > 0 and isnumeric(WayfareStateID)=0 then d_WayfareStateID+' |value not numeric' else d_WayfareStateID end as d_WayfareStateID
-		,	IndigenousStatusID_original
-		,	d_IndigenousStatusID_original
-		,	IndigenousStatusID
-		,	case when len(IndigenousStatusID) > 0 and isnumeric(IndigenousStatusID)=0 then d_IndigenousStatusID+' |value not numeric' else d_IndigenousStatusID end as d_IndigenousStatusID
-		,	AmoRegReferringNumber
-		,	d_AmoRegReferringNumber
-		,	DoctorName
-		,	d_DoctorName
-		,	TreatingFacilityCode
-		,	d_TreatingFacilityCode
-		,	FacilityCode
-		,	d_FacilityCode
-		,	DateOfDiagnosis
-		,	case when len(DateOfDiagnosis) > 0 and isdate(DateOfDiagnosis)=0 then d_DateOfDiagnosis+' |value not a date' else d_DateOfDiagnosis end as d_DateOfDiagnosis
-		,	CancerSiteCodeID
-		,	d_CancerSiteCodeID
-		,	CancerSiteCodeIDVersion
-		,	d_CancerSiteCodeIDVersion
-		,	MorphologyCodeIDVersion
-		,	d_MorphologyCodeIDVersion
-		,	BestBasisOfDiagnosisID_original
-		,	d_BestBasisOfDiagnosisID_original
-		,	BestBasisOfDiagnosisID
-		,	case when len(BestBasisOfDiagnosisID) > 0 and isnumeric(BestBasisOfDiagnosisID)=0 then d_BestBasisOfDiagnosisID+' |value not numeric' else d_BestBasisOfDiagnosisID end as d_BestBasisOfDiagnosisID
-		,	Laterality_original
-		,	d_Laterality_original
-		,	Laterality
-		,	case when len(Laterality) > 0 and isnumeric(Laterality)=0 then d_Laterality+' |value not numeric' else d_Laterality end as d_Laterality
-		,	HistopathologicalGradeID
-		,	case when len(HistopathologicalGradeID) > 0 and isnumeric(HistopathologicalGradeID)=0 then d_HistopathologicalGradeID+' |value not numeric' else d_HistopathologicalGradeID end as d_HistopathologicalGradeID
-		,	MorphologyCodeID
-		,	d_MorphologyCodeID
-		,	DegreeOfSpreadID
-		,	case when len(DegreeOfSpreadID) > 0 and isnumeric(DegreeOfSpreadID)=0 then d_DegreeOfSpreadID+' |value not numeric' else d_DegreeOfSpreadID end as d_DegreeOfSpreadID
-		,	TNMStagingDate
-		,	case when len(TNMStagingDate) > 0 and isdate(TNMStagingDate)=0 then d_TNMStagingDate+' |value not a date' else d_TNMStagingDate end as d_TNMStagingDate
-		,	TStageID_original
-		,	NStageID_original
-		,	MStageID_original
-		,	TStageID
-		,	d_TStageID
-		,	NStageID
-		,	d_NStageID
-		,	MStageID
-		,	d_MStageID
-		,	TNMStagingGroupID
-		,	d_TNMStagingGroupID
-		,	TNMStagingBasisID
-		,	d_TNMStagingBasisID
-		,	OtherStagingDate
-		,	d_OtherStagingDate
-		,	OtherStagingSchemeID
-		,	case when len(OtherStagingSchemeID) > 0 and isnumeric(OtherStagingSchemeID)=0 then d_OtherStagingSchemeID+' |value not numeric' else d_OtherStagingSchemeID end as d_OtherStagingSchemeID
-		,	OtherStagingGroupID
-		,	d_OtherStagingGroupID
-		,	OtherStagingBasisID
-		,	d_OtherStagingBasisID
-		,	EpisodeIntentID_original
-		,	d_EpisodeIntentID_original
-		,	EpisodeIntentID
-		,	case when len(EpisodeIntentID) > 0 and isnumeric(EpisodeIntentID)=0 then d_EpisodeIntentID+' |value not numeric' else d_EpisodeIntentID end as d_EpisodeIntentID
-		,	InitialTreatmentFlag
-		,	case when len(InitialTreatmentFlag) > 0 and isnumeric(InitialTreatmentFlag)=0 then d_InitialTreatmentFlag+' |value not numeric' else d_InitialTreatmentFlag end as d_InitialTreatmentFlag
-		,	EpisodeStartDate
-		,	case when len(EpisodeStartDate) > 0 and isdate(EpisodeStartDate)=0 then d_EpisodeStartDate+' |value not a date' else d_EpisodeStartDate end as d_EpisodeStartDate
-		,	EpisodeEndDate
-		,	case when len(EpisodeEndDate) > 0 and isdate(EpisodeEndDate)=0 then d_EpisodeEndDate+' |value not a date' else d_EpisodeEndDate end as d_EpisodeEndDate
-		,	AntiNeoplasticCycles
-		,	case when len(AntiNeoplasticCycles) > 0 and isnumeric(AntiNeoplasticCycles)=0 then d_AntiNeoplasticCycles+' |value not numeric' else d_AntiNeoplasticCycles end as d_AntiNeoplasticCycles
-		,	ProtocolID
-		,	d_ProtocolID
-		,	NotificationEpisodeChemoCycle
-		,	case when len(NotificationEpisodeChemoCycle) > 0 and isnumeric(NotificationEpisodeChemoCycle)=0 then d_NotificationEpisodeChemoCycle+' |value not numeric' else d_NotificationEpisodeChemoCycle end as d_NotificationEpisodeChemoCycle
-		,	OMISDrugName
-		,	d_OMISDrugName
-		,	NotificationEpisodeChemoDose
-		,	d_NotificationEpisodeChemoDose
-		,	NotificationEpisodeChemoRouteID_original
-		,	d_NotificationEpisodeChemoRouteID_original
-		,	NotificationEpisodeChemoRouteID
-		,	case when len(NotificationEpisodeChemoRouteID) > 0 and isnumeric(NotificationEpisodeChemoRouteID)=0 then d_NotificationEpisodeChemoRouteID+' |value not numeric' else d_NotificationEpisodeChemoRouteID end as d_NotificationEpisodeChemoRouteID
-		,	NotificationEpisodeChemoStartDate
-		,	case when len(NotificationEpisodeChemoStartDate) > 0 and isdate(NotificationEpisodeChemoStartDate)=0 then d_NotificationEpisodeChemoStartDate+' |value not a date' else d_NotificationEpisodeChemoStartDate end as d_NotificationEpisodeChemoStartDate
-		,	NotificationEpisodeChemoEndDate
-		,	case when len(NotificationEpisodeChemoEndDate) > 0 and isdate(NotificationEpisodeChemoEndDate)=0 then d_NotificationEpisodeChemoEndDate+' |value not a date' else d_NotificationEpisodeChemoEndDate end as d_NotificationEpisodeChemoEndDate
-		,	NotificationEpisodeChemoFrequency
-		,	case when len(NotificationEpisodeChemoFrequency) > 0 and isnumeric(NotificationEpisodeChemoFrequency)=0 then d_NotificationEpisodeChemoFrequency+' |value not numeric' else d_NotificationEpisodeChemoFrequency end as d_NotificationEpisodeChemoFrequency
-		,	NotificationEpisodeChemoFrequencyUnit
-		,	case when len(NotificationEpisodeChemoFrequencyUnit) > 0 and isnumeric(NotificationEpisodeChemoFrequencyUnit)=0 then d_NotificationEpisodeChemoFrequencyUnit+' |value not numeric' else d_NotificationEpisodeChemoFrequencyUnit end as d_NotificationEpisodeChemoFrequencyUnit
-		,	NotificationEpisodeChemoDay
-		,	d_NotificationEpisodeChemoDay
-		,	ReferralDate
-		,	case when len(ReferralDate) > 0 and isdate(ReferralDate)=0 then d_ReferralDate+' |value not a date' else d_ReferralDate end as d_ReferralDate
-		,	ConsultationDate
-		,	case when len(ConsultationDate) > 0 and isdate(ConsultationDate)=0 then d_ConsultationDate+' |value not a date' else d_ConsultationDate end as d_ConsultationDate
-		,	ClinicalTrialDate
-		,	case when len(ClinicalTrialDate) > 0 and isdate(ClinicalTrialDate)=0 then d_ClinicalTrialDate+' |value not a date' else d_ClinicalTrialDate end as d_ClinicalTrialDate
-		,	ClinicalTrialName
-		,	d_ClinicalTrialName
-		,	MDTDate
-		,	case when len(MDTDate) > 0 and isdate(MDTDate)=0 then d_MDTDate+' |value not a date' else d_MDTDate end as d_MDTDate
-		,	ReferalToPalliativeCareDate
-		,	case when len(ReferalToPalliativeCareDate) > 0 and isdate(ReferalToPalliativeCareDate)=0 then d_ReferalToPalliativeCareDate+' |value not a date' else d_ReferalToPalliativeCareDate end as d_ReferalToPalliativeCareDate
-		,	PerformanceStatusDate
-		,	case when len(PerformanceStatusDate) > 0 and isdate(PerformanceStatusDate)=0 then d_PerformanceStatusDate+' |value not a date' else d_PerformanceStatusDate end as d_PerformanceStatusDate
-		,	PerformanceStatus
-		,	case when len(PerformanceStatus) > 0 and isnumeric(PerformanceStatus)=0 then d_PerformanceStatus+' |value not numeric' else d_PerformanceStatus end as d_PerformanceStatus
-		,	CPL_ID
-		,	CPlan_Name
-		,	Regimen
-	from ( select  rtrim(isnull(cast(GroupID  as varchar(50)),'')) as GroupID
-				, cast((case when len(rtrim(GroupID)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_GroupID
-				, rtrim(isnull(cast(MedicareNumber  as varchar(50)),'')) as MedicareNumber
-				, cast('O' as varchar(250)) as d_MedicareNumber
-				, rtrim(isnull(cast(MRN  as varchar(50)),'')) as MRN 
-				, cast('O' as varchar(250)) as d_MRN
-				, rtrim(isnull(cast([UniqueIdentifier]  as varchar(50)),'')) as [UniqueIdentifier] 
-				, cast('O' as varchar(250)) as d_UniqueIdentifier
-				, rtrim(isnull(cast(GivenName1  as varchar(50)),'')) as GivenName1 
-				, cast((case when len(rtrim(GivenName1)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_GivenName1
-				, rtrim(isnull(cast(GivenName2  as varchar(50)),'')) as GivenName2 
-				, cast('O' as varchar(250)) as d_GivenName2
-				, rtrim(isnull(cast(Surname  as varchar(50)),'')) as Surname 
-				, cast((case when len(rtrim(Surname)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_Surname
-				, rtrim(isnull(cast(AliasSurname  as varchar(50)),'')) as AliasSurname 
-				, cast('O' as varchar(250)) as d_AliasSurname
-				, rtrim(isnull(cast(Sex as varchar(50)),'')) as Sex
-				, cast((case when len(rtrim(Sex)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_Sex
-				, rtrim(isnull(cast(DateOfBirth as varchar(50)),'')) as DateOfBirth
-				, cast((case when len(rtrim(DateOfBirth)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_DateOfBirth
-				, rtrim(isnull(cast(Birth_Place_original as varchar(50)),'')) as Birth_Place_original
-				, '' as d_Birth_Place_original
-				, rtrim(isnull(cast(COBCodeSACC as varchar(50)),'')) as COBCodeSACC
-				, cast((case when len(rtrim(COBCodeSACC)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_COBCodeSACC
-				, rtrim(isnull(cast(WayfareAddress as varchar(200)),'')) as WayfareAddress
-				, cast((case when len(rtrim(WayfareAddress)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_WayfareAddress
-				, rtrim(isnull(cast(Locality as varchar(50)),'')) as Locality
-				, cast((case when len(rtrim(Locality)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_Locality
-				, rtrim(isnull(cast(Postcode as varchar(50)),'')) as Postcode
-				, cast((case when len(rtrim(Postcode)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_Postcode
-				, rtrim(isnull(cast(WayfareStateID_original as varchar(50)),'')) as WayfareStateID_original
-				, '' as d_WayfareStateID_original
-				, rtrim(isnull(cast(WayfareStateID as varchar(50)),'')) as WayfareStateID
-				, cast((case when len(rtrim(WayfareStateID)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_WayfareStateID
-				, rtrim(isnull(cast(IndigenousStatusID_original as varchar(50)),'')) as IndigenousStatusID_original
-				, cast('O' as varchar(250)) as d_IndigenousStatusID_original
-				, rtrim(isnull(cast(IndigenousStatusID as varchar(50)),'')) as IndigenousStatusID
-				, cast('O' as varchar(250)) as d_IndigenousStatusID
-				, rtrim(isnull(cast(AmoRegReferringNumber as varchar(50)),'')) as AmoRegReferringNumber
-				, cast((case when len(rtrim(AmoRegReferringNumber)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_AmoRegReferringNumber
-				, rtrim(isnull(cast(DoctorName as varchar(120)),'')) as DoctorName
-				, cast('O' as varchar(250)) as d_DoctorName
-				, rtrim(isnull(cast(TreatingFacilityCode as varchar(50)),'')) as TreatingFacilityCode
-				, cast('O' as varchar(250)) as d_TreatingFacilityCode
-				, rtrim(isnull(cast(FacilityCode as varchar(50)),'')) as FacilityCode
-				, cast((case when len(rtrim(FacilityCode)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_FacilityCode
-				, rtrim(isnull(cast(DateOfDiagnosis as varchar(50)),'')) as DateOfDiagnosis
-				, cast((case when len(rtrim(DateOfDiagnosis)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_DateOfDiagnosis
-				, rtrim(isnull(cast(CancerSiteCodeID as varchar(50)),'')) as CancerSiteCodeID
-				, cast((case when len(rtrim(CancerSiteCodeID)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_CancerSiteCodeID
-				, rtrim(isnull(cast(CancerSiteCodeIDVersion as varchar(50)),'')) as CancerSiteCodeIDVersion
-				, cast((case when len(rtrim(CancerSiteCodeIDVersion)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_CancerSiteCodeIDVersion 
-				, rtrim(isnull(cast(MorphologyCodeIDVersion as varchar(50)),'')) as MorphologyCodeIDVersion
-				, cast((case when len(rtrim(MorphologyCodeIDVersion)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_MorphologyCodeIDVersion		
-				, rtrim(isnull(cast(BestBasisOfDiagnosisID_original as varchar(50)),'')) as BestBasisOfDiagnosisID_original
-				, cast('O' as varchar(250)) as d_BestBasisOfDiagnosisID_original
-				, rtrim(isnull(cast(BestBasisOfDiagnosisID as varchar(50)),'')) as BestBasisOfDiagnosisID
-				, cast('O' as varchar(250)) as d_BestBasisOfDiagnosisID
-				, rtrim(isnull(cast(Laterality_original as varchar(50)),'')) as Laterality_original
-				, cast('O' as varchar(250)) as d_Laterality_original
-				, rtrim(isnull(cast(Laterality as varchar(50)),'')) as Laterality
-				, cast('O' as varchar(250)) as d_Laterality
-				, rtrim(isnull(cast(HistopathologicalGradeID as varchar(50)),'')) as HistopathologicalGradeID
-				, cast('O' as varchar(250)) as d_HistopathologicalGradeID
-				, rtrim(isnull(cast(cast(MorphologyCodeID as int) as varchar(50)),'')) as MorphologyCodeID
-				, cast('O' as varchar(250)) as d_MorphologyCodeID
-				, rtrim(isnull(cast(DegreeOfSpreadID as varchar(50)),'')) as DegreeOfSpreadID
-				, cast('O' as varchar(250)) as d_DegreeOfSpreadID
-				, rtrim(isnull(cast(TNMStagingDate as varchar(50)),'')) as TNMStagingDate
-				, cast('O' as varchar(250)) as d_TNMStagingDate
-				, rtrim(isnull(cast(TStageID_original as varchar(50)),'')) as TStageID_original
-				, rtrim(isnull(cast(NStageID_original as varchar(50)),'')) as NStageID_original
-				, rtrim(isnull(cast(MStageID_original as varchar(50)),'')) as MStageID_original
-				, rtrim(isnull(cast(TStageID as varchar(50)),'')) as TStageID
-				, cast('O' as varchar(250)) as d_TStageID
-				, rtrim(isnull(cast(NStageID as varchar(50)),'')) as NStageID
-				, cast('O' as varchar(250)) as d_NStageID
-				, rtrim(isnull(cast(MStageID as varchar(50)),'')) as MStageID
-				, cast('O' as varchar(250)) as d_MStageID
-				, rtrim(isnull(cast(TNMStagingGroupID as varchar(50)),'')) as TNMStagingGroupID
-				, cast('O' as varchar(250)) as d_TNMStagingGroupID
-				, rtrim(isnull(cast(TNMStagingBasisID as varchar(50)),'')) as TNMStagingBasisID
-				, cast('O' as varchar(250)) as d_TNMStagingBasisID
-				, rtrim(isnull(cast(OtherStagingDate as varchar(50)),'')) as OtherStagingDate
-				, cast('O' as varchar(250)) as d_OtherStagingDate
-				, rtrim(isnull(cast(OtherStagingSchemeID as varchar(50)),'')) as OtherStagingSchemeID
-				, cast('O' as varchar(250)) as d_OtherStagingSchemeID
-				, rtrim(isnull(cast(OtherStagingGroupID as varchar(50)),'')) as OtherStagingGroupID
-				, cast('O' as varchar(250)) as d_OtherStagingGroupID
-				, rtrim(isnull(cast(OtherStagingBasisID as varchar(50)),'')) as OtherStagingBasisID
-				, cast('O' as varchar(250)) as d_OtherStagingBasisID
-				, rtrim(isnull(cast(EpisodeIntentID_original as varchar(50)),'')) as EpisodeIntentID_original
-				, cast('O' as varchar(250)) as d_EpisodeIntentID_original
-				, rtrim(isnull(cast(EpisodeIntentID as varchar(50)),'')) as EpisodeIntentID
-				, cast('O' as varchar(250)) as d_EpisodeIntentID
-				, rtrim(isnull(cast(InitialTreatmentFlag as varchar(50)),'')) as InitialTreatmentFlag
-				, cast('O' as varchar(250)) as d_InitialTreatmentFlag
-				, rtrim(isnull(cast(EpisodeStartDate as varchar(50)),'')) as EpisodeStartDate
-				, cast((case when len(rtrim(EpisodeStartDate)) = 0 then 'M |Empty' else 'M' end) as varchar(250)) as d_EpisodeStartDate
-				, rtrim(isnull(cast(EpisodeEndDate as varchar(50)),'')) as EpisodeEndDate
-				, cast('O' as varchar(250)) as d_EpisodeEndDate
-				, rtrim(isnull(cast(AntiNeoplasticCycles as varchar(50)),'')) as AntiNeoplasticCycles
-				, cast('O' as varchar(250)) as d_AntiNeoplasticCycles
-				, rtrim(isnull(cast(ProtocolID as varchar(50)),'')) as ProtocolID
-				, cast('O' as varchar(250)) as d_ProtocolID
-				, rtrim(isnull(cast(NotificationEpisodeChemoCycle as varchar(50)),'')) as NotificationEpisodeChemoCycle
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoCycle
-				, rtrim(isnull(cast(OMISDrugName as varchar(512)),'')) as OMISDrugName
-				, cast('O' as varchar(250)) as d_OMISDrugName
-				, rtrim(isnull(cast(NotificationEpisodeChemoDose as varchar(50)),'')) as NotificationEpisodeChemoDose
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoDose
-				, rtrim(isnull(cast(NotificationEpisodeChemoRouteID_original as varchar(50)),'')) as NotificationEpisodeChemoRouteID_original
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoRouteID_original
-				, rtrim(isnull(cast(NotificationEpisodeChemoRouteID as varchar(50)),'')) as NotificationEpisodeChemoRouteID
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoRouteID
-				, rtrim(isnull(cast(NotificationEpisodeChemoStartDate as varchar(50)),'')) as NotificationEpisodeChemoStartDate
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoStartDate
-				, rtrim(isnull(cast(NotificationEpisodeChemoEndDate as varchar(50)),'')) as NotificationEpisodeChemoEndDate
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoEndDate
-				, rtrim(isnull(cast(NotificationEpisodeChemoFrequency as varchar(50)),'')) as NotificationEpisodeChemoFrequency
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoFrequency
-				, rtrim(isnull(cast(NotificationEpisodeChemoFrequencyUnit as varchar(50)),'')) as NotificationEpisodeChemoFrequencyUnit
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoFrequencyUnit
-				, rtrim(isnull(cast(NotificationEpisodeChemoDay as varchar(50)),'')) as NotificationEpisodeChemoDay
-				, cast('O' as varchar(250)) as d_NotificationEpisodeChemoDay
-				, rtrim(isnull(cast(ReferralDate as varchar(50)),'')) as ReferralDate
-				, cast('O' as varchar(250)) as d_ReferralDate
-				, rtrim(isnull(cast(ConsultationDate as varchar(50)),'')) as ConsultationDate
-				, cast('O' as varchar(250)) as d_ConsultationDate
-				, rtrim(isnull(cast(ClinicalTrialDate as varchar(50)),'')) as ClinicalTrialDate
-				, cast('O' as varchar(250)) as d_ClinicalTrialDate
-				, rtrim(isnull(cast(ClinicalTrialName as varchar(50)),'')) as ClinicalTrialName
-				, cast('O' as varchar(250)) as d_ClinicalTrialName
-				, rtrim(isnull(cast(MDTDate as varchar(50)),'')) as MDTDate
-				, cast('O' as varchar(250)) as d_MDTDate
-				, rtrim(isnull(cast(ReferalToPalliativeCareDate as varchar(50)),'')) as ReferalToPalliativeCareDate
-				, cast('O' as varchar(250)) as d_ReferalToPalliativeCareDate
-				, rtrim(isnull(cast(PerformanceStatusDate as varchar(50)),'')) as PerformanceStatusDate
-				, cast('O' as varchar(250)) as d_PerformanceStatusDate
-				, rtrim(isnull(cast(PerformanceStatus as varchar(50)),'')) as PerformanceStatus
-				, cast('O' as varchar(250)) as d_PerformanceStatus
-				,	CPL_ID
-				,	CPlan_Name
-				,	Regimen
-			from #omis_final  --#omis
-			--where FacilityCode = @facility_code
-			) a) a
- 
- /*
-OtherStagingDate
-MDTDate
-NotificationEpisodeChemoStartDate
-NotificationEpisodeChemoEndDate
-ConsultationDate
-DateOfDiagnosis
-TNMStagingDate
-DateOfBirth 
-EpisodeStartDate
-EpisodeEndDate  
-ReferralDate
-ConsultationDate
-ClinicalTrialDate 
-ReferalToPalliativeCareDate
-PerformanceStatusDate
-*/
-
-	update  #omis_debug
-	set d_CancerSiteCodeID = d_CancerSiteCodeID +  ' |value not a cancer code'
-	where not(CancerSiteCodeID like 'B%' or CancerSiteCodeID like 'C%' or CancerSiteCodeID like 'D%' or CancerSiteCodeID like 'L%')
-
-	update  #omis_debug
-	set d_OtherStagingDate = d_OtherStagingDate +  ' |value < DateOfDiagnosis'
-	where isdate(OtherStagingDate ) > 0 and isdate(DateOfDiagnosis) > 0 and OtherStagingDate < DateOfDiagnosis
-
-	update  #omis_debug
-	set d_TNMStagingDate = d_TNMStagingDate  +  ' |value < DateOfDiagnosis'
-	where isdate(TNMStagingDate ) > 0 and isdate(DateOfDiagnosis) > 0 and TNMStagingDate < DateOfDiagnosis
+	( select 
 	
-	update  #omis_debug
-	set d_ClinicalTrialDate  = d_ClinicalTrialDate  +  ' |value < DateOfDiagnosis'
-	where isdate(ClinicalTrialDate ) > 0 and isdate(DateOfDiagnosis) > 0 and ClinicalTrialDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_ReferralDate  = d_ReferralDate +  ' |value < DateOfDiagnosis'
-	where isdate(ReferralDate ) > 0 and isdate(DateOfDiagnosis) > 0 and ReferralDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_ReferalToPalliativeCareDate  = d_ReferalToPalliativeCareDate  +  ' |value < DateOfDiagnosis'
-	where isdate(ReferalToPalliativeCareDate) > 0 and isdate(DateOfDiagnosis) > 0 and ReferalToPalliativeCareDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_ConsultationDate = d_ConsultationDate +  ' |value < DateOfDiagnosis'
-	where isdate(ConsultationDate) > 0 and isdate(DateOfDiagnosis) > 0 and ConsultationDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_PerformanceStatusDate = d_PerformanceStatusDate +  ' |value < DateOfDiagnosis'
-	where isdate(PerformanceStatusDate) > 0 and isdate(DateOfDiagnosis) > 0 and PerformanceStatusDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_EpisodeEndDate = d_EpisodeEndDate +  ' |value < DateOfDiagnosis'
-	where isdate(EpisodeEndDate) > 0 and isdate(DateOfDiagnosis) > 0 and EpisodeEndDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_EpisodeStartDate = d_EpisodeStartDate +  ' |value < DateOfDiagnosis'
-	where isdate(EpisodeStartDate) > 0 and isdate(DateOfDiagnosis) > 0 and EpisodeStartDate < DateOfDiagnosis
-	
-	update  #omis_debug
-	set d_ReferalToPalliativeCareDate  = d_ReferalToPalliativeCareDate +  ' |value < DateOfBirth'
-	where isdate(ReferalToPalliativeCareDate ) > 0 and isdate(DateOfBirth ) > 0 and ReferalToPalliativeCareDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_ClinicalTrialDate  = d_ClinicalTrialDate  +  ' |value < DateOfBirth'
-	where isdate(ClinicalTrialDate ) > 0 and isdate(DateOfBirth ) > 0 and ClinicalTrialDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_MDTDate  = d_MDTDate  +  ' |value < DateOfBirth'
-	where isdate(MDTDate ) > 0 and isdate(DateOfBirth ) > 0 and MDTDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_ReferralDate = d_ReferralDate +  ' |value < DateOfBirth'
-	where isdate(ReferralDate ) > 0 and isdate(DateOfBirth ) > 0 and ReferralDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_ConsultationDate = d_ConsultationDate +  ' |value < DateOfBirth'
-	where isdate(ConsultationDate) > 0 and isdate(DateOfBirth ) > 0 and ConsultationDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_PerformanceStatusDate = d_PerformanceStatusDate +  ' |value < DateOfBirth'
-	where isdate(PerformanceStatusDate) > 0 and isdate(DateOfBirth ) > 0 and PerformanceStatusDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_EpisodeStartDate = d_EpisodeStartDate +  ' |value < DateOfBirth'
-	where isdate(EpisodeStartDate) > 0 and isdate(DateOfBirth ) > 0 and EpisodeStartDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_EpisodeEndDate = d_EpisodeEndDate +  ' |value < DateOfBirth'
-	where isdate(EpisodeEndDate) > 0 and isdate(DateOfBirth ) > 0 and EpisodeEndDate <= DateOfBirth 
-
-	update  #omis_debug
-	set d_EpisodeStartDate = d_EpisodeStartDate +  ' |value > EpisodeEndDate'
-	where isdate(EpisodeStartDate) > 0 and isdate(EpisodeEndDate ) > 0 and EpisodeStartDate > EpisodeEndDate 
-	  
-	--update  #omis_debug
-	--set d_ = d_ +  ' |value > '
-	--where isdate() > 0 and isdate() > 0 and  >    
-	 
-
-	update  #omis_debug
-	set d_DateOfBirth = d_DateOfBirth +  ' |value > ConsultationDate'
-	where DateOfBirth >  ConsultationDate and ConsultationDate <> ''
-
-	update  #omis_debug
-	set d_DateOfBirth = d_DateOfBirth +  ' |value > EpisodeStartDate'
-	where DateOfBirth >  EpisodeStartDate and EpisodeStartDate <> ''
-
-	update  #omis_debug
-	set d_DateOfBirth = d_DateOfBirth +  ' |value > DateOfDiagnosis'
-	where DateOfBirth >  DateOfDiagnosis and DateOfDiagnosis <> ''
-
-	update  #omis_debug
-	set d_ConsultationDate = d_ConsultationDate +  ' |value < ReferralDate'
-	where ConsultationDate <  ReferralDate and ConsultationDate <> '' and ReferralDate <> ''
- 
-	update  #omis_debug
-	set d_DateOfDiagnosis = d_DateOfDiagnosis +  ' |value > NotificationEpisodeChemoStartDate'
-	where DateOfDiagnosis >  NotificationEpisodeChemoStartDate and DateOfDiagnosis <> '' and NotificationEpisodeChemoStartDate <> ''
-
-	update  #omis_debug
-	set d_ConsultationDate = d_ConsultationDate +  ' |value > NotificationEpisodeChemoStartDate'
-	where ConsultationDate >  NotificationEpisodeChemoStartDate and ConsultationDate <> '' and NotificationEpisodeChemoStartDate <> ''
-
-	update  #omis_debug
-	set d_NotificationEpisodeChemoStartDate = d_NotificationEpisodeChemoStartDate +  ' |value < ReferralDate'
-	where NotificationEpisodeChemoStartDate <  ReferralDate and ReferralDate <> '' and NotificationEpisodeChemoStartDate <> ''
-
-	update  #omis_debug
-	set d_NotificationEpisodeChemoEndDate = d_NotificationEpisodeChemoEndDate +  ' |value < NotificationEpisodeChemoStartDate'
-	where NotificationEpisodeChemoEndDate <  NotificationEpisodeChemoStartDate and NotificationEpisodeChemoEndDate <> '' and NotificationEpisodeChemoStartDate <> ''
-
-	update  #omis_debug
-	set d_PerformanceStatusDate = d_PerformanceStatusDate +  ' |value < ReferralDate'
-	where PerformanceStatusDate <  ReferralDate and PerformanceStatusDate <> '' and ReferralDate <> ''
-
-	update  #omis_debug
-	set d_ReferralDate = d_ReferralDate +  ' |ReferralDate-ConsultationDate not between 0 and 120 days'
-	where not(datediff(d, ReferralDate, ConsultationDate) between 0 and 120) and ConsultationDate <> '' and ReferralDate <> ''
-
-	update  #omis_debug
-	set d_ConsultationDate = d_ConsultationDate +  ' |ConsultationDate-NotificationEpisodeChemoStartDate not between 0 and 90 days'
-	where not(datediff(d, ConsultationDate, NotificationEpisodeChemoStartDate) between 0 and 90) and ConsultationDate <> '' and NotificationEpisodeChemoStartDate <> ''
-
-
-	/******* RANGE / SET validation  **********/ 
-	update  #omis_debug
-	set d_InitialTreatmentFlag = d_InitialTreatmentFlag + ' |value not in range'
-	where InitialTreatmentFlag not in (1,2)
-
-	update  #omis_debug
-	set d_sex = d_sex + ' |value not valid'
-	where  sex not in (1,2,3,9)
-
-	update  #omis_debug
-	set d_COBCodeSACC = d_COBCodeSACC + ' |value not in country set'
-	where  COBCodeSACC not in (select code from @countries)
- 
-
-	update  #omis_debug
-	set d_WayfareStateID = d_WayfareStateID + ' |value not in state set'
-	where  WayfareStateID not in (select code from @states)
-
-	update  #omis_debug
-	set d_IndigenousStatusID = d_IndigenousStatusID + ' |value not in Indigenious set'
-	where  IndigenousStatusID not in (select code from @indigenious)
-
-	update  #omis_debug
-	set d_FacilityCode = d_FacilityCode + ' |value not in correct format'
-	where len(FacilityCode) > 0 and (len(FacilityCode) < 3 or len(FacilityCode) > 5)
-
-	update  #omis_debug
-	set d_TreatingFacilityCode = d_TreatingFacilityCode + ' |value not in correct format'
-	where TreatingFacilityCode <> '' and ( len(TreatingFacilityCode) < 3 or len(TreatingFacilityCode) > 5)
-
-	update  #omis_debug
-	set d_BestBasisOfDiagnosisID = d_BestBasisOfDiagnosisID + ' |value not in valid set'
-	where  BestBasisOfDiagnosisID <> '' and BestBasisOfDiagnosisID not in (1,2,4,5,6,7,8)
-
-	update  #omis_debug
-	set d_Laterality = d_Laterality + ' |value not in valid set'
-	where  Laterality <> '' and Laterality not in (1,2,3,9)
-
-	update  #omis_debug
-	set d_HistopathologicalGradeID = d_HistopathologicalGradeID + ' |value not in valid set'
-	where  isnumeric(HistopathologicalGradeID) = 1 and HistopathologicalGradeID not in (1,2,3,4,8,9)
-
-	update  #omis_debug
-	set d_DegreeOfSpreadID = d_DegreeOfSpreadID + ' |value not in valid set'
-	where  isnumeric(DegreeOfSpreadID) = 1 and DegreeOfSpreadID not in (1,2,3,4,6,7,9)
-
-	update  #omis_debug
-	set d_TNMStagingBasisID = d_TNMStagingBasisID + ' |value not in valid set'
-	where TNMStagingBasisID <> '' and TNMStagingBasisID not in ('P','C')
-
-	update  #omis_debug
-	set d_AntiNeoplasticCycles = d_AntiNeoplasticCycles + ' |value out of range'
-	where ISNUMERIC(AntiNeoplasticCycles) = 1 and (AntiNeoplasticCycles <  1 or AntiNeoplasticCycles > 300)
-
-
-	update  #omis_debug
-	set d_NotificationEpisodeChemoEndDate = d_NotificationEpisodeChemoEndDate + ' |value < start date'
-	where  isdate(NotificationEpisodeChemoEndDate) = 1 and isdate(NotificationEpisodeChemoStartDate) = 1
-		and  NotificationEpisodeChemoEndDate  <  NotificationEpisodeChemoStartDate 
-	
-	update  #omis_debug
-	set d_ProtocolID = d_ProtocolID + ' |value not an eviQ number'
-	where  isnumeric(replace(replace(replace(replace(ProtocolID,'-',''),':',''),'eviq',''),'id','')) < 1 and ProtocolID <> ''
-
-
-	select  @hosp_code  as GroupID  --hospitalid
-		, replace(right('0'+convert(varchar(10),@startdate, 103),10),'/','')    as d_GroupID  --reportstartdate
-		, replace(right('0'+convert(varchar(10),@enddate, 103),10),'/','')  as MedicareNumber  --reportenddate
-		, replace(right('0'+convert(varchar(10),getdate(), 103),10),'/','')    as  d_MedicareNumber --rundate
-		, right('0'+cast(datepart(hh, getdate()) as varchar(2)),2)+right('0'+cast(datepart(mi, getdate()) as varchar(2)),2) as MRN --runtime
-		, cast(count(*) as varchar(50))  as d_MRN --recordcount
-		, 'C'  as [UniqueIdentifier] --notificationtypeid
-		, max(left(facilitycode,4))   as d_UniqueIdentifier  --cancerfacilittypeid 
-		,'' as 	GivenName1
-		,'' as 	d_GivenName1
-		,'' as 	GivenName2
-		,'' as 	d_GivenName2
-		,'' as 	Surname
-		,'' as 	d_Surname
-		,'' as 	AliasSurname
-		,'' as 	d_AliasSurname
-		,'' as 	Sex
-		,'' as 	d_Sex
-		,'' as 	DateOfBirth
-		,'' as 	d_DateOfBirth
-		,'' as 	Birth_Place_original
-		,'' as 	d_Birth_Place_original
-		,'' as 	COBCodeSACC
-		,'' as 	d_COBCodeSACC
-		,'' as 	WayfareAddress
-		,'' as 	d_WayfareAddress
-		,'' as 	Locality
-		,'' as 	d_Locality
-		,'' as 	Postcode
-		,'' as 	d_Postcode
-		,'' as 	WayfareStateID_original
-		,'' as 	d_WayfareStateID_original
-		,'' as 	WayfareStateID
-		,'' as 	d_WayfareStateID
-		,'' as 	IndigenousStatusID_original
-		,'' as 	d_IndigenousStatusID_original
-		,'' as 	IndigenousStatusID
-		,'' as 	d_IndigenousStatusID
-		,'' as 	AmoRegReferringNumber
-		,'' as 	d_AmoRegReferringNumber
-		,'' as 	DoctorName
-		,'' as 	d_DoctorName
-		,'' as 	TreatingFacilityCode
-		,'' as 	d_TreatingFacilityCode
-		,'' as 	FacilityCode
-		,'' as 	d_FacilityCode
-		,'' as 	DateOfDiagnosis
-		,'' as 	d_DateOfDiagnosis
-		,'' as 	CancerSiteCodeID
-		,'' as 	d_CancerSiteCodeID
-		,'' as 	CancerSiteCodeIDVersion
-		,'' as 	d_CancerSiteCodeIDVersion
-		,'' as 	MorphologyCodeIDVersion
-		,'' as 	d_MorphologyCodeIDVersion
-		,'' as 	BestBasisOfDiagnosisID_original
-		,'' as 	d_BestBasisOfDiagnosisID_original
-		,'' as 	BestBasisOfDiagnosisID
-		,'' as 	d_BestBasisOfDiagnosisID
-		,'' as 	Laterality_original
-		,'' as 	d_Laterality_original
-		,'' as 	Laterality
-		,'' as 	d_Laterality
-		,'' as 	HistopathologicalGradeID
-		,'' as 	d_HistopathologicalGradeID
-		,'' as 	MorphologyCodeID
-		,'' as 	d_MorphologyCodeID
-		,'' as 	DegreeOfSpreadID
-		,'' as 	d_DegreeOfSpreadID
-		,'' as 	TNMStagingDate
-		,'' as 	d_TNMStagingDate
-		--,'' as 	TStageID_original
-		--,'' as 	NStageID_original
-		--,'' as 	MStageID_original
-		,'' as 	TStageID
-		,'' as 	d_TStageID
-		,'' as 	NStageID
-		,'' as 	d_NStageID
-		,'' as 	MStageID
-		,'' as 	d_MStageID
-		,'' as 	TNMStagingGroupID
-		,'' as 	d_TNMStagingGroupID
-		,'' as 	TNMStagingBasisID
-		,'' as 	d_TNMStagingBasisID
-		,'' as 	OtherStagingDate
-		,'' as 	d_OtherStagingDate
-		,'' as 	OtherStagingSchemeID
-		,'' as 	d_OtherStagingSchemeID
-		,'' as 	OtherStagingGroupID
-		,'' as 	d_OtherStagingGroupID
-		,'' as 	OtherStagingBasisID
-		,'' as 	d_OtherStagingBasisID
-		,'' as 	EpisodeIntentID_original
-		,'' as 	d_EpisodeIntentID_original
-		,'' as 	EpisodeIntentID
-		,'' as 	d_EpisodeIntentID
-		,'' as 	InitialTreatmentFlag
-		,'' as 	d_InitialTreatmentFlag
-		,'' as 	EpisodeStartDate
-		,'' as 	d_EpisodeStartDate
-		,'' as 	EpisodeEndDate
-		,'' as 	d_EpisodeEndDate
-		,'' as 	AntiNeoplasticCycles
-		,'' as 	d_AntiNeoplasticCycles
-		,'' as 	ProtocolID
-		,'' as 	d_ProtocolID
-		,'' as 	NotificationEpisodeChemoCycle
-		,'' as 	d_NotificationEpisodeChemoCycle
-		,'' as 	OMISDrugName
-		,'' as 	d_OMISDrugName
-		,'' as 	NotificationEpisodeChemoDose
-		,'' as 	d_NotificationEpisodeChemoDose
-		,'' as 	NotificationEpisodeChemoRouteID_original
-		,'' as 	d_NotificationEpisodeChemoRouteID_original
-		,'' as 	NotificationEpisodeChemoRouteID
-		,'' as 	d_NotificationEpisodeChemoRouteID
-		,'' as 	NotificationEpisodeChemoStartDate
-		,'' as 	d_NotificationEpisodeChemoStartDate
-		,'' as 	NotificationEpisodeChemoEndDate
-		,'' as 	d_NotificationEpisodeChemoEndDate
-		,'' as 	NotificationEpisodeChemoFrequency
-		,'' as 	d_NotificationEpisodeChemoFrequency
-		,'' as 	NotificationEpisodeChemoFrequencyUnit
-		,'' as 	d_NotificationEpisodeChemoFrequencyUnit
-		,'' as 	NotificationEpisodeChemoDay
-		,'' as 	d_NotificationEpisodeChemoDay
-		,'' as 	ReferralDate
-		,'' as 	d_ReferralDate
-		,'' as 	ConsultationDate
-		,'' as 	d_ConsultationDate
-		,'' as 	ClinicalTrialDate
-		,'' as 	d_ClinicalTrialDate
-		,'' as 	ClinicalTrialName
-		,'' as 	d_ClinicalTrialName
-		,'' as 	MDTDate
-		,'' as 	d_MDTDate
-		,'' as 	ReferalToPalliativeCareDate
-		,'' as 	d_ReferalToPalliativeCareDate
-		,'' as 	PerformanceStatusDate
-		,'' as 	d_PerformanceStatusDate
-		,'' as 	PerformanceStatus
-		,'' as 	d_PerformanceStatus
-		,'' as 	CPL_ID
-		,'' as 	CPlan_Name
-		,'' as 	Regimen
-	from #omis_debug   
-	union all
-	select 	GroupID
-		,	d_GroupID
-		,	MedicareNumber
-		,	d_MedicareNumber
-		,	MRN
-		,	d_MRN
-		,	UniqueIdentifier
-		,	d_UniqueIdentifier
-		,	GivenName1
-		,	d_GivenName1
-		,	GivenName2
-		,	d_GivenName2
-		,	Surname
-		,	d_Surname
-		,	AliasSurname
-		,	d_AliasSurname
-		,	Sex
-		,	d_Sex
-		,	DateOfBirth
-		,	d_DateOfBirth
-		,	Birth_Place_original
-		,	d_Birth_Place_original
-		,	COBCodeSACC
-		,	d_COBCodeSACC
-		,	WayfareAddress
-		,	d_WayfareAddress
-		,	Locality
-		,	d_Locality
-		,	Postcode
-		,	d_Postcode
-		,	WayfareStateID_original
-		,	d_WayfareStateID_original
-		,	WayfareStateID
-		,	d_WayfareStateID
-		,	IndigenousStatusID_original
-		,	d_IndigenousStatusID_original
-		,	IndigenousStatusID
-		,	d_IndigenousStatusID
-		,	AmoRegReferringNumber
-		,	d_AmoRegReferringNumber
-		,	DoctorName
-		,	d_DoctorName
-		,	TreatingFacilityCode
-		,	d_TreatingFacilityCode
-		,	FacilityCode
-		,	d_FacilityCode
-		,	DateOfDiagnosis
-		,	d_DateOfDiagnosis
-		,	CancerSiteCodeID
-		,	d_CancerSiteCodeID
-		,	CancerSiteCodeIDVersion
-		,	d_CancerSiteCodeIDVersion
-		,	MorphologyCodeIDVersion
-		,	d_MorphologyCodeIDVersion
-		,	BestBasisOfDiagnosisID_original
-		,	d_BestBasisOfDiagnosisID_original
-		,	BestBasisOfDiagnosisID
-		,	d_BestBasisOfDiagnosisID
-		,	Laterality_original
-		,	d_Laterality_original
-		,	Laterality
-		,	d_Laterality
-		,	HistopathologicalGradeID
-		,	d_HistopathologicalGradeID
-		,	MorphologyCodeID
-		,	d_MorphologyCodeID
-		,	DegreeOfSpreadID
-		,	d_DegreeOfSpreadID
-		,	TNMStagingDate
-		,	d_TNMStagingDate
-		--,	TStageID_original
-		--,	NStageID_original
-		--,	MStageID_original
-		,	TStageID
-		,	d_TStageID
-		,	NStageID
-		,	d_NStageID
-		,	MStageID
-		,	d_MStageID
-		,	TNMStagingGroupID
-		,	d_TNMStagingGroupID
-		,	TNMStagingBasisID
-		,	d_TNMStagingBasisID
-		,	OtherStagingDate
-		,	d_OtherStagingDate
-		,	OtherStagingSchemeID
-		,	d_OtherStagingSchemeID
-		,	OtherStagingGroupID
-		,	d_OtherStagingGroupID
-		,	OtherStagingBasisID
-		,	d_OtherStagingBasisID
-		,	EpisodeIntentID_original
-		,	d_EpisodeIntentID_original
-		,	EpisodeIntentID
-		,	d_EpisodeIntentID
-		,	InitialTreatmentFlag
-		,	d_InitialTreatmentFlag
-		,	EpisodeStartDate
-		,	d_EpisodeStartDate
-		,	EpisodeEndDate
-		,	d_EpisodeEndDate
-		,	AntiNeoplasticCycles
-		,	d_AntiNeoplasticCycles
-		,	ProtocolID
-		,	d_ProtocolID
-		,	NotificationEpisodeChemoCycle
-		,	d_NotificationEpisodeChemoCycle
-		,	OMISDrugName
-		,	d_OMISDrugName
-		,	NotificationEpisodeChemoDose
-		,	d_NotificationEpisodeChemoDose
-		,	NotificationEpisodeChemoRouteID_original
-		,	d_NotificationEpisodeChemoRouteID_original
-		,	NotificationEpisodeChemoRouteID
-		,	d_NotificationEpisodeChemoRouteID
-		,	NotificationEpisodeChemoStartDate
-		,	d_NotificationEpisodeChemoStartDate
-		,	NotificationEpisodeChemoEndDate
-		,	d_NotificationEpisodeChemoEndDate
-		,	NotificationEpisodeChemoFrequency
-		,	d_NotificationEpisodeChemoFrequency
-		,	NotificationEpisodeChemoFrequencyUnit
-		,	d_NotificationEpisodeChemoFrequencyUnit
-		,	NotificationEpisodeChemoDay
-		,	d_NotificationEpisodeChemoDay
-		,	ReferralDate
-		,	d_ReferralDate
-		,	ConsultationDate
-		,	d_ConsultationDate
-		,	ClinicalTrialDate
-		,	d_ClinicalTrialDate
-		,	ClinicalTrialName
-		,	d_ClinicalTrialName
-		,	MDTDate
-		,	d_MDTDate
-		,	ReferalToPalliativeCareDate
-		,	d_ReferalToPalliativeCareDate
-		,	PerformanceStatusDate
-		,	d_PerformanceStatusDate
-		,	PerformanceStatus
-		,	d_PerformanceStatus
-		,	CPL_ID
-		,	CPlan_Name
-		,	Regimen
-	from #omis_debug  /*
-	where len(d_AliasSurname) > 1
-		or len(d_AmoRegReferringNumber) > 1
-		or len(d_AntiNeoplasticCycles) > 1
-		or len(d_BestBasisOfDiagnosisID) > 1
-		or len(d_BestBasisOfDiagnosisID_original) > 1
-		or len(d_Birth_Place_original) > 1
-		or len(d_CancerSiteCodeID) > 1
-		or len(d_CancerSiteCodeIDVersion) > 1
-		or len(d_ClinicalTrialDate) > 1
-		or len(d_ClinicalTrialName) > 1
-		or len(d_COBCodeSACC) > 1
-		or len(d_ConsultationDate) > 1
-		or len(d_DateOfBirth) > 1
-		or len(d_DateOfDiagnosis) > 1
-		or len(d_DegreeOfSpreadID) > 1
-		or len(d_DoctorName) > 1
-		or len(d_EpisodeEndDate) > 1
-		or len(d_EpisodeIntentID) > 1
-		or len(d_EpisodeIntentID_original) > 1
-		or len(d_EpisodeStartDate) > 1
-		or len(d_FacilityCode) > 1
-		or len(d_GivenName1) > 1
-		or len(d_GivenName2) > 1
-		or len(d_GroupID) > 1
-		or len(d_HistopathologicalGradeID) > 1
-		or len(d_IndigenousStatusID) > 1
-		or len(d_IndigenousStatusID_original) > 1
-		or len(d_InitialTreatmentFlag) > 1
-		or len(d_Laterality) > 1
-		or len(d_Laterality_original) > 1
-		or len(d_Locality) > 1
-		or len(d_MDTDate) > 1
-		or len(d_MedicareNumber) > 1
-		or len(d_MorphologyCodeID) > 1
-		or len(d_MRN) > 1
-		or len(d_MStageID) > 1
-		or len(d_NotificationEpisodeChemoCycle) > 1
-		or len(d_NotificationEpisodeChemoDay) > 1
-		or len(d_NotificationEpisodeChemoDose) > 1
-		or len(d_NotificationEpisodeChemoEndDate) > 1
-		or len(d_NotificationEpisodeChemoFrequency) > 1
-		or len(d_NotificationEpisodeChemoFrequencyUnit) > 1
-		or len(d_NotificationEpisodeChemoRouteID) > 1
-		or len(d_NotificationEpisodeChemoRouteID_original) > 1
-		or len(d_NotificationEpisodeChemoStartDate) > 1
-		or len(d_NStageID) > 1
-		or len(d_OMISDrugName) > 1
-		or len(d_OtherStagingBasisID) > 1
-		or len(d_OtherStagingDate) > 1
-		or len(d_OtherStagingGroupID) > 1
-		or len(d_OtherStagingSchemeID) > 1
-		or len(d_PerformanceStatus) > 1
-		or len(d_PerformanceStatusDate) > 1
-		or len(d_Postcode) > 1
-		or len(d_ProtocolID) > 1
-		or len(d_ReferalToPalliativeCareDate) > 1
-		or len(d_ReferralDate) > 1
-		or len(d_Sex) > 1
-		or len(d_Surname) > 1
-		or len(d_TNMStagingBasisID) > 1
-		or len(d_TNMStagingDate) > 1
-		or len(d_TNMStagingGroupID) > 1
-		or len(d_TreatingFacilityCode) > 1
-		or len(d_TStageID) > 1
-		or len(d_UniqueIdentifier) > 1
-		or len(d_WayfareAddress) > 1
-		or len(d_WayfareStateID) > 1
-		or len(d_WayfareStateID_original) > 1*/
-end
-else 
-( select @hosp_code  as GroupID  --hospitalid
+	'ALL FAC' AS GroupID  --hospitalid joined together  
 	, replace(right('0'+convert(varchar(10),@startdate, 103),10),'/','')    as MedicareNumber  --reportstartdate
 	, replace(right('0'+convert(varchar(10),@enddate, 103),10),'/','')  as MRN  --reportenddate
 	, replace(right('0'+convert(varchar(10),getdate(), 103),10),'/','')    as  [UniqueIdentifier] --rundate
@@ -3181,6 +2098,7 @@ else
 	,'' as ReferalToPalliativeCareDate
 	,'' as PerformanceStatusDate
 	,'' as PerformanceStatus 
+	, '' as ExtractDate
 from #omis_final
 union all  
 select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID 
@@ -3252,24 +2170,6 @@ select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID
 	, isnull(replace(right('0'+convert(varchar(10),ReferalToPalliativeCareDate , 103),10),'/',''),'') as ReferalToPalliativeCareDate
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(1)),'') as PerformanceStatus
+	, isnull(replace(right('0'+convert(varchar(10),@ExtractDate, 103),10),'/',''),'') as ExtractDate
 from #omis_final  )
   
-
-  /********************************************************************************************************************************************************/
-
-   
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

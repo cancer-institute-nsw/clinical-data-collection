@@ -24,22 +24,29 @@ There are three main queries
 *			All EVIQ and NON EVIQ Drugs included.
 *20220331	OMISDrugName is not null added to remove blank drug rows.
 *20220505	Added fallback for missing Facility to Gosford (should only occur for patient administered from ward with no other appts in MOSAIQ)
+*20230118	Updated script to remove Pathology Test patient.
+*20240805	Updated script  Extract Date using getdate variable.
+							Eviq Mapping Table can now run this query to see the old/vs new mapping for auditing.  SELECT * FROM CPlan s INNER JOIN @cplan_mapped f ON s.CPL_ID = f.CPL_ID  WHERE CPlan.Version = 0 
+							Patient Location improvment with date param.
 **********************************************************************************************************************************/
---use [MOSAIQREPORT]
---go 
- 
-declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1)
--- ,@hosp_code varchar(10), @deptcode varchar(10), @facicode varchar(10), @dt varchar(25)
-
-set @startdate =  '&[ReportingStartDate]&'	-- start of month
-set @enddate =  '&[ReportingEndDate]&'		-- end of month
-set @QA = 'n'					-- Y = show real dates, N = DDMMYYYY
-set @showheader = 'n'				-- Y = show file name, N = omit file name 
---set @hospital = ''				-- Commented out.
-
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 SET nocount on
 SET ANSI_WARNINGS OFF
+
+--use [MOSAIQREPORT]
+go 
+ 
+declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @ExtractDate date
+-- ,@hosp_code varchar(10), @deptcode varchar(10), @facicode varchar(10), @dt varchar(25)
+
+set @startdate = '2024-04-01'		         -- start of month
+set @enddate = '2024-06-30'			-- end of month
+set @QA = 'n'					-- Y = show real dates, N = DDMMYYYY
+set @showheader = 'n'				-- Y = show file name, N = omit file name 
+--set @hospital = ''				-- Commented out.
+set @ExtractDate = getdate()		--ExtractDate set to today
+
+
  
 /*
 select  @deptcode = Department_OID  , @facicode = pager  from config where Inst_Abrv = @hospital	-- Hospital code: A212 
@@ -64,12 +71,7 @@ declare @episodeintent table (code varchar(3), name varchar(200))
 declare @drugadminroute table (code int, name int)
 declare @stagegroup table (code varchar(20), name varchar(20))
 declare @otherstagegroup table (code varchar(20), schemename varchar(10), groupname varchar(20))
-declare @custom_careplan_remap2 table (code int, name varchar(30))
-declare @custom_careplan_remap table (code int, name varchar(30))
 
- 
-insert into @custom_careplan_remap (code, name)
-select distinct code, name from @custom_careplan_remap2
 
 -- No changes
 insert into @otherstagegroup values ('2E','9','IIE')
@@ -579,9 +581,71 @@ if object_id('tempdb..#omis') is not null
  drop table #omis
 if object_id('tempdb..#omis_final') is not null
  drop table #omis_final
-
  
+/*********************************** EVIQ MAPPING***************************/ 
 
+-- Declare the table variables
+DECLARE @cplan_mapped TABLE (
+    CPL_ID INT,
+    cplanname VARCHAR(255),
+    regimen VARCHAR(255),
+    map_protocol VARCHAR(20)
+);
+
+-- Insert data into @cplan_mapped
+INSERT INTO @cplan_mapped (CPL_ID, cplanname, regimen, map_protocol)
+SELECT DISTINCT 
+    CPL_ID, 
+    cplan_name as cplanname, 
+    CASE 
+        WHEN UPPER(regimen) LIKE '%TRIAL%' OR UPPER(CPlan_Name) LIKE '%TRIAL%' THEN '1571'
+        WHEN UPPER(regimen) LIKE 'EVIQ%' THEN LTRIM(REPLACE(regimen, 'EVIQ', '')) 
+        ELSE '1570' 
+    END as regimen, 
+    CAST('1' AS VARCHAR(20)) as map_protocol 
+FROM cplan;
+
+-- Uncomment this part if you need to use the joined result
+
+
+/******************Patient Location Mapping***********************/
+-- The script has been using the most frequent inst_id of scheduled appts to map the patient location/deaprtment for treatment. As orders are not always reliable.
+-- This has been moved to a temp tabel to improve performance.
+
+-- Declare the table variable
+DECLARE @PatientLocation TABLE (
+    Pat_Id1 INT,
+    Inst_ID INT
+);
+
+-- Insert data into @PatientLocation
+INSERT INTO @PatientLocation (Pat_Id1, Inst_ID)
+SELECT Pat_Id1, Inst_ID
+FROM (
+    SELECT 
+        Pat_ID1, 
+        Inst_ID, 
+        COUNT(Inst_ID) AS total, 
+        ROW_NUMBER() OVER (PARTITION BY Pat_ID1 ORDER BY COUNT(Inst_ID) DESC) AS row
+    FROM 
+        schedule WITH (NOLOCK)
+        JOIN Staff WITH (NOLOCK) ON Schedule.Location = Staff.Staff_ID
+    WHERE 
+        schedule.version = 0
+        AND schedule.App_DtTm <= CONVERT(DATETIME, @enddate)
+        AND schedule.App_DtTm >= CONVERT(DATETIME, DATEADD(day, -180, @startdate)) 
+        AND Pat_ID1 > 10000
+        AND Schedule.ESI_Source = ''
+        AND Schedule.Suppressed = 0
+    GROUP BY 
+        Pat_ID1, Inst_ID
+) AS recs
+WHERE row = 1;
+
+-- Uncomment this part if you need to use the result
+-- SELECT * FROM @PatientLocation;
+
+/************OMIS START******************/
 SELECT DISTINCT TreatmentEvents.Pat_ID1,
 	TreatmentEvents.PCP_GROUP_ID AS GroupID, 
     Demographics.SS_Number          AS MedicareNumber,			-- 001 medicare number
@@ -686,7 +750,7 @@ SELECT DISTINCT TreatmentEvents.Pat_ID1,
    last_admin.last_cycle_number  AS AntiNeoplasticCycles,
 --	TreatmentEvents.delivered_instances   AS AntiNeoplasticCycles,   --SystemicTherapyCycles,
 --	TreatmentEvents.Regimen         AS ProtocolID,   -- SystemicTherapyProtocolID, eviQ protocal ID
-	case when charindex('v.',TreatmentEvents.regimen, 5) > 0 then substring(TreatmentEvents.regimen,1,charindex('v.',TreatmentEvents.regimen, 5)-2) else regimen end AS ProtocolID, 
+	regimen AS ProtocolID, 
     drugs.regimen_cycle_number   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
     --null   AS NotificationEpisodeChemoCycle,   --SystemicTherapyProtocolCycleNo,	-- 071 reported cycle number   , drug number
 	drugs.drug_name        AS OMISDrugName,   --SystemicTherapyDrug,		-- 072 systemic therapy drug name 
@@ -843,15 +907,9 @@ FROM
 					Config.State_Province, 
 					Config.Postal, 
 					Config.Display_ID 
-				from (select Pat_ID1, Inst_ID, COUNT(Inst_ID) AS total, ROW_NUMBER() OVER (PARTITION BY Pat_ID1 ORDER BY COUNT(Inst_ID) DESC ) AS row
-						FROM schedule with (nolock), Staff with (nolock)
-						where Schedule.Suppressed =0 
-							and Schedule.version = 0
-							and Schedule.Location = Staff.Staff_ID
-							and Schedule.ESI_Source = ''
-						group by Pat_ID1, Inst_ID
+				from (Select Pat_ID1, Inst_ID FROM @PatientLocation
 					) AS attendance_table_2
-					join Config with (nolock) on Config.Inst_ID = attendance_table_2.Inst_ID and attendance_table_2.row = 1 
+					join Config with (nolock) on Config.Inst_ID = attendance_table_2.Inst_ID
 			) AS TreatmentLocation ON TreatmentLocation.Pat_ID1 = patient_care_plan.Pat_ID1
 		LEFT OUTER JOIN
 		--(select *
@@ -1266,7 +1324,7 @@ where
 --not len(mrn)=7 
 --or ISNUMERIC(mrn) = 0
 --or  upper(mrn) like '[A-z]%'1` 
-upper(mrn) like '716757' --test, pathologytwo
+upper(mrn) IN ('716757', '999403') --test, pathologytwo --pathology, test
  
 
 
@@ -1708,7 +1766,7 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,	EpisodeStartDate
 	,	EpisodeEndDate
 	,	AntiNeoplasticCycles
-	,	Case WHEN UPPER(ProtocolID)  LIKE 'EVIQ%' THEN LTRIM(Replace(ProtocolID, 'EVIQ', '')) ELSE '1570' END	as ProtocolID
+	,	cp.regimen	as ProtocolID
 	,	NotificationEpisodeChemoCycle
 	,	OMISDrugName
 	,	NotificationEpisodeChemoDose
@@ -1724,12 +1782,12 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,	ClinicalTrialDate
 	,	ClinicalTrialName
 	,	MDTDate
-	,	ReferalToPalliativeCareDate 
+	,	ReferalToPalliativeCareDate
 	,	PerformanceStatusDate
 	,	PerformanceStatus
-	,	CPL_ID
+	,	#omis.CPL_ID
 	,	CPlan_Name
-	,	Regimen
+	,	#omis.Regimen as regimen_unmapped
 	,	cycle_length
 	,	last_cycle_number
 	,	plan_status
@@ -1741,107 +1799,13 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,   dx_record_Edit_DtTm
 into #omis_final
 from #omis 
+INNER JOIN @cplan_mapped cp ON #omis.CPL_ID = cp.CPL_ID
 Where 1=1
 AND OMISDrugName is not null
-/*
-where NOT(UPPER(ProtocolID)  LIKE 'EVIQ%') and OMISDrugName is not null --and cpl_id not in (select code from @custom_careplan_remap where name <> '1570')
-	--and HospitalCode = @hospital
-union all
-select distinct	cast(GroupID  as varchar(20))
-	,	cast(MedicareNumber as varchar(20))
-	,	cast(MRN as varchar(20))
-	,	cast([UniqueIdentifier] as varchar(20))
-	,	cast(GivenName1 as varchar(50))
-	,	cast(GivenName2 as varchar(50))
-	,	cast(Surname as varchar(50))
-	,	cast(AliasSurname as varchar(50))
-	,	Sex
-	,	DateOfBirth
-	,	Birth_Place_original
-	,	COBCodeSACC
-	,	WayfareAddress
-	,	Locality
-	,	Postcode
-	,	WayfareStateID_original
-	,	WayfareStateID
-	,	IndigenousStatusID_original
-	,	IndigenousStatusID
-	,	AmoRegReferringNumber
-	,	DoctorName
-	,	TreatingFacilityCode
-	,	FacilityCode
-	,	DateOfDiagnosis
-	,	CancerSiteCodeID
-	,	CancerSiteCodeIDVersion
-	,   MorphologyCodeIDVersion
-	,	BestBasisOfDiagnosisID_original
-	,	BestBasisOfDiagnosisID
-	,	Laterality_original
-	,	Laterality
-	,	HistopathologicalGradeID
-	,	MorphologyCodeID
-	,	DegreeOfSpreadID
-	,	TNMStagingDate
-	,	TStageID_original
-	,	NStageID_original
-	,	MStageID_original
-	,	TStageID
-	,	NStageID
-	,	MStageID
-	,	TNMStagingGroupID
-	,	TNMStagingBasisID
-	,	OtherStagingDate
-	,	OtherStagingSchemeID
-	,	OtherStagingGroupID
-	,	OtherStagingBasisID
-	,	EpisodeIntentID_original
-	,	EpisodeIntentID
-	,	InitialTreatmentFlag
-	,	EpisodeStartDate
-	,	EpisodeEndDate
-	,	AntiNeoplasticCycles
-	,	Replace(ProtocolID, 'EVIQ ', '')
-	,	null as NotificationEpisodeChemoCycle
-	,	null as OMISDrugName
-	,	null as NotificationEpisodeChemoDose
-	,	null as NotificationEpisodeChemoRouteID_original
-	,	null as NotificationEpisodeChemoRouteID
-	,	null as NotificationEpisodeChemoStartDate
-	,	null as NotificationEpisodeChemoEndDate
-	,	null as NotificationEpisodeChemoFrequency
-	,	null as NotificationEpisodeChemoFrequencyUnit
-	,	null as NotificationEpisodeChemoDay
-	,	ReferralDate
-	,	ConsultationDate
-	,	ClinicalTrialDate
-	,	ClinicalTrialName
-	,	MDTDate
-	,	ReferalToPalliativeCareDate
-	,	PerformanceStatusDate
-	,	PerformanceStatus
-	,	CPL_ID
-	,	CPlan_Name
-	,	Regimen
-	,	cycle_length
-	,	last_cycle_number
-	,	plan_status
-	,	adm_status
-	,	last_admin_date
-	,	calculated_end_date
-	,   dx_record_Create_DtTm
-	,   dx_record_Sanct_DtTm
-	,   dx_record_Edit_DtTm
-from #omis 
-where UPPER(ProtocolID) LIKE 'EVIQ%' 
-	--and HospitalCode = @hospital  
-	
-
-*/
-
-
 
 
 --Final Query selected #omis_final
+/***********************************************************/
 ( 
 select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID 
 	, isnull(cast(MedicareNumber  as varchar(12)),'') as MedicareNumber 
@@ -1905,13 +1869,14 @@ select distinct isnull(cast(GroupID  as varchar(11)),'') as GroupID
 	, isnull(cast(NotificationEpisodeChemoFrequencyUnit as varchar(1)),'') as NotificationEpisodeChemoFrequencyUnit
 	, isnull(cast(NotificationEpisodeChemoDay as varchar(15)),'') as NotificationEpisodeChemoDay
 	, isnull(replace(right('0'+convert(varchar(10),ReferralDate, 103),10),'/',''),'') as ReferralDate
-	, isnull(replace(right('0'+convert(varchar(10),ConsultationDate , 103),10),'/',''),'') as ConsultationDate
+	, isnull(replace(right('0'+convert(varchar(10),ConsultationDate , 103),10),'/',''),'') as ConsultationDatea
 	, isnull(replace(right('0'+convert(varchar(10),ClinicalTrialDate, 103),10),'/',''),'') as ClinicalTrialDate
 	, isnull(cast(ClinicalTrialName as varchar(100)),'') as ClinicalTrialName
 	, isnull(replace(right('0'+convert(varchar(10),MDTDate, 103),10),'/',''),'') as MDTDate
-	, isnull(replace(right('0'+convert(varchar(10),ReferalToPalliativeCareDate , 103),10),'/',''),'') as ReferralToPalliativeCareDate
+	, isnull(replace(right('0'+convert(varchar(10),ReferalToPalliativeCareDate , 103),10),'/',''),'') as ReferalToPalliativeCareDate
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(1)),'') as PerformanceStatus 
+	, isnull(replace(right('0'+convert(varchar(10),@ExtractDate, 103),10),'/',''),'') as ExtractDate
 from #omis_final  )
 
 
