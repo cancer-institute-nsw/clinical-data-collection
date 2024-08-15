@@ -1,1 +1,1 @@
-Select * From Config
+Select CFG_ID as GroupID, * From Config
