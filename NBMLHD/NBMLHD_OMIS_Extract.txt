@@ -30,7 +30,7 @@ SET ANSI_WARNINGS OFF
 --use [MOSAIQREPORT]
 --go 
  
-declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @ExtractDate date
+declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @ExtractDate date, @HospCode varchar(5), @CancerCode varchar(5)
 
 set @startdate = '&[ReportingStartDate]&'		-- start of month
 set @enddate = '&[ReportingEndDate]&'			-- end of month
@@ -38,8 +38,17 @@ set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
 set @ExtractDate = GETDATE()
 
-
+/*
+set @startdate = '2024-01-01'		-- start of month
+set @enddate = '2024-01-30'			-- end of month
+set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
+set @showheader = 'n'				-- Y = show file name, N = omit file name 
+set @ExtractDate = GETDATE()
 set @debug = @QA
+set @HospCode = 'D210'
+set @CancerCode = 'D076'
+*/
+
 declare @countries table (code int, name varchar(200))
 declare @states table (code varchar(3), name varchar(200))
 declare @indigenious table (code varchar(3), name varchar(200))
@@ -49,12 +58,7 @@ declare @episodeintent table (code varchar(3), name varchar(200))
 declare @drugadminroute table (code int, name int)
 declare @stagegroup table (code varchar(20), name varchar(20))
 declare @otherstagegroup table (code varchar(20), schemename varchar(10), groupname varchar(20))
-declare @custom_careplan_remap2 table (code int, name varchar(30))
-declare @custom_careplan_remap table (code int, name varchar(30))
 
- 
-insert into @custom_careplan_remap (code, name)
-select distinct code, name from @custom_careplan_remap2
 
 -- No changes
 insert into @otherstagegroup values ('2E','9','IIE')
@@ -118,7 +122,6 @@ insert into @stagegroup values ('Unknown','Unknown')
 insert into @stagegroup values ('Unstaged','Unstaged')
 insert into @stagegroup values ('REVIEW','REVIEW')
 
-
 -- update 20230315
 insert into @drugadminroute values (98,704)           --NG                            
 insert into @drugadminroute values (18,2876)          --SC
@@ -127,7 +130,6 @@ insert into @drugadminroute values (2,6515)           --IM
 insert into @drugadminroute values (1,7031)           --CIV                           
 insert into @drugadminroute values (13,7115)          --Oral                          
 insert into @drugadminroute values (98,15901)         --Injection
-
  
 -- update 20230312
 insert into @episodeintent values (21, 'Curative - Adjuvant' )
@@ -162,7 +164,6 @@ insert into @laterality values (2, 'Origin right side - ' )
 insert into @laterality values (3, '0 - Not paired site' )
 insert into @laterality values (9, '4 - Bilateral' )
 insert into @laterality values (9, '4 - Bilateral involv' )
-
   
 -- update 20230315
 insert into @cancerdiagnosis values (2, 'Lab or marker study' )
@@ -180,11 +181,6 @@ insert into @cancerdiagnosis values (2, 'Radiography' )
 insert into @cancerdiagnosis values (7, 'Histology Primary' )
 insert into @cancerdiagnosis values (6, 'Histology Metastatic' )
 
-
-
-
-
-
 -- update 20220214
 insert into @indigenious values (1, 'Aboriginal          ' )
 insert into @indigenious values (3, 'Aboriginal and TSI  ' )
@@ -193,9 +189,7 @@ insert into @indigenious values (4, 'Neither             ' )
 insert into @indigenious values (2, 'Torres Strait Isdr  ' )
 insert into @indigenious values (9, 'Not Stated          ' )
 insert into @indigenious values (9, 'Unknown             ' )
-            
-			
-
+            	
 -- update 20230513
 insert into @states values ('0','Overseas')
 insert into @states values ('1','New South Wales')
@@ -236,346 +230,6 @@ insert into @states values (99, 'NSP' )
 
 
 
--- No changes
---insert into @countries values (4,'0')
---insert into @countries values (1,'At Sea')
---insert into @countries values (3,'Not Stated')
---insert into @countries values (4,'Unknown')
---insert into @countries values (5,'Unidentified')
---insert into @countries values (911,'Europe')
---insert into @countries values (912,'USSR - former')
---insert into @countries values (913,'Former Yugoslavia')
---insert into @countries values (914,'Czechoslovakia')
---insert into @countries values (915,'Kurdistan')
---insert into @countries values (916,'East Asia')
---insert into @countries values (917,'Asia')
---insert into @countries values (918,'Africa')
---insert into @countries values (921,'Serbia and Montenegro')
---insert into @countries values (1000,'Oceania and Antarctica')
---insert into @countries values (1100,'Australia (incl External Ter)')
---insert into @countries values (1101,'Australia')
---insert into @countries values (1102,'Norfolk Island')
---insert into @countries values (1199,'Australian External Territories nec')
---insert into @countries values (1201,'New Zealand')
---insert into @countries values (1300,'Melanesia')
---insert into @countries values (1301,'New Caledonia')
---insert into @countries values (1302,'Papua New Guinea')
---insert into @countries values (1303,'Solomon Islands')
---insert into @countries values (1304,'Vanuatu')
---insert into @countries values (1400,'Micronesia')
---insert into @countries values (1401,'Guam')
---insert into @countries values (1402,'Kiribati')
---insert into @countries values (1403,'Marshall Islands')
---insert into @countries values (1404,'Micronesia Federated States of')
---insert into @countries values (1405,'Nauru')
---insert into @countries values (1406,'Northern Mariana Islands')
---insert into @countries values (1407,'Palau')
---insert into @countries values (1500,'Polynesia (excludes Hawaii)')
---insert into @countries values (1501,'Cook Islands')
---insert into @countries values (1502,'Fiji')
---insert into @countries values (1503,'French Polynesia')
---insert into @countries values (1504,'Niue')
---insert into @countries values (1505,'Samoa')
---insert into @countries values (1506,'Samoa American')
---insert into @countries values (1507,'Tokelau')
---insert into @countries values (1508,'Tonga')
---insert into @countries values (1511,'Tuvalu')
---insert into @countries values (1512,'Wallis and Futuna')
---insert into @countries values (1599,'Polynesia (not Hawaii) nec')
---insert into @countries values (1600,'Antarctica')
---insert into @countries values (1601,'Antarctica Adelie Land (France)')
---insert into @countries values (1602,'Antarctica Argentinian Territory')
---insert into @countries values (1603,'Antarctica Australian Territory')
---insert into @countries values (1604,'Antarctica British Territory')
---insert into @countries values (1605,'Antarctica Chilean Territory')
---insert into @countries values (1606,'Queen Maud Land (Norway)')
---insert into @countries values (1607,'Ross Dependency (New Zealand)')
---insert into @countries values (2000,'North-West Europe')
---insert into @countries values (2100,'United Kingdom')
---insert into @countries values (2101,'Channel Islands')
---insert into @countries values (2102,'England')
---insert into @countries values (2103,'Isle of Man')
---insert into @countries values (2104,'Northern Ireland')
---insert into @countries values (2105,'Scotland')
---insert into @countries values (2106,'Wales')
-----insert into @countries values (2200,'Ireland')
---insert into @countries values (2201,'Ireland')
---insert into @countries values (2300,'Western Europe')
---insert into @countries values (2301,'Austria')
---insert into @countries values (2302,'Belgium')
---insert into @countries values (2303,'France')
---insert into @countries values (2304,'Germany')
---insert into @countries values (2305,'Liechtenstein')
---insert into @countries values (2306,'Luxembourg')
---insert into @countries values (2307,'Monaco')
---insert into @countries values (2308,'Netherlands')
---insert into @countries values (2311,'Switzerland')
---insert into @countries values (2400,'Northern Europe')
---insert into @countries values (2401,'Denmark')
---insert into @countries values (2402,'Faeroe Islands')
---insert into @countries values (2403,'Finland')
---insert into @countries values (2404,'Greenland')
---insert into @countries values (2405,'Iceland')
---insert into @countries values (2406,'Norway')
---insert into @countries values (2407,'Sweden')
---insert into @countries values (3000,'Southern and Eastern Europe')
---insert into @countries values (3100,'Southern Europe')
---insert into @countries values (3101,'Andorra')
---insert into @countries values (3102,'Gibraltar')
---insert into @countries values (3103,'Holy See')
---insert into @countries values (3104,'Italy')
---insert into @countries values (3105,'Malta')
---insert into @countries values (3106,'Portugal')
---insert into @countries values (3107,'San Marino')
---insert into @countries values (3108,'Spain')
---insert into @countries values (3200,'South Eastern Europe')
---insert into @countries values (3201,'Albania')
---insert into @countries values (3202,'Bosnia and Herzegovina')
---insert into @countries values (3203,'Bulgaria')
---insert into @countries values (3204,'Croatia')
---insert into @countries values (3205,'Cyprus')
---insert into @countries values (3206,'Macedonia (FYROM)')
---insert into @countries values (3207,'Greece')
---insert into @countries values (3208,'Moldova')
---insert into @countries values (3211,'Romania')
---insert into @countries values (3212,'Slovenia')
---insert into @countries values (3214,'Montenegro')
---insert into @countries values (3215,'Serbia')
---insert into @countries values (3300,'Eastern Europe')
---insert into @countries values (3301,'Belarus')
---insert into @countries values (3302,'Czech Republic')
---insert into @countries values (3303,'Estonia')
---insert into @countries values (3304,'Hungary')
---insert into @countries values (3305,'Latvia')
---insert into @countries values (3306,'Lithuania')
---insert into @countries values (3307,'Poland')
---insert into @countries values (3308,'Russia')
---insert into @countries values (3311,'Slovakia')
---insert into @countries values (3312,'Ukraine')
---insert into @countries values (4000,'Nth Africa & Middle East')
---insert into @countries values (4100,'North Africa')
---insert into @countries values (4101,'Algeria')
---insert into @countries values (4102,'Egypt')
---insert into @countries values (4103,'Libya')
---insert into @countries values (4104,'Morocco')
---insert into @countries values (4105,'Sudan')
---insert into @countries values (4106,'Tunisia')
---insert into @countries values (4107,'Western Sahara')
---insert into @countries values (4199,'North Africa nec')
---insert into @countries values (4200,'Middle East')
---insert into @countries values (4201,'Bahrain')
---insert into @countries values (4202,'Gaza Strip and West Bank')
---insert into @countries values (4203,'Iran')
---insert into @countries values (4204,'Iraq')
---insert into @countries values (4205,'Israel')
---insert into @countries values (4206,'Jordan')
---insert into @countries values (4207,'Kuwait')
---insert into @countries values (4208,'Lebanon')
---insert into @countries values (4211,'Oman')
---insert into @countries values (4212,'Qatar')
---insert into @countries values (4213,'Saudi Arabia')
---insert into @countries values (4214,'Syria')
---insert into @countries values (4215,'Turkey')
---insert into @countries values (4216,'United Arab Emirates')
---insert into @countries values (4217,'Yemen')
---insert into @countries values (5000,'South-East Asia')
---insert into @countries values (5100,'Mainland Sth-East Asia')
---insert into @countries values (5101,'Burma (Myanmar)')
---insert into @countries values (5102,'Cambodia')
---insert into @countries values (5103,'Laos')
---insert into @countries values (5104,'Thailand')
---insert into @countries values (5105,'Vietnam')
---insert into @countries values (5200,'Maritime Sth-East Asia')
---insert into @countries values (5201,'Brunei Darussalam')
---insert into @countries values (5202,'Indonesia')
---insert into @countries values (5203,'Malaysia')
---insert into @countries values (5204,'Philippines')
---insert into @countries values (5205,'Singapore')
---insert into @countries values (5206,'East Timor')
---insert into @countries values (6000,'North-East Asia')
---insert into @countries values (6100,'Chinese Asia (incl Mongolia)')
---insert into @countries values (6101,'China (excl SARs and Taiwan)')
---insert into @countries values (6102,'Hong Kong (SAR of China)')
---insert into @countries values (6103,'Macau (SAR of China)')
---insert into @countries values (6104,'Mongolia')
---insert into @countries values (6105,'Taiwan')
---insert into @countries values (6200,'Japan and the Koreas')
---insert into @countries values (6201,'Japan')
---insert into @countries values (6202,'Korea North')
---insert into @countries values (6203,'Korea South')
---insert into @countries values (7000,'Southern and Central Asia')
---insert into @countries values (7100,'Southern Asia')
---insert into @countries values (7101,'Bangladesh')
---insert into @countries values (7102,'Bhutan')
---insert into @countries values (7103,'India')
---insert into @countries values (7104,'Maldives')
---insert into @countries values (7105,'Nepal')
---insert into @countries values (7106,'Pakistan')
---insert into @countries values (7107,'Sri Lanka')
---insert into @countries values (7200,'Central Asia')
---insert into @countries values (7201,'Afghanistan')
---insert into @countries values (7202,'Armenia')
---insert into @countries values (7203,'Azerbaijan')
---insert into @countries values (7204,'Georgia')
---insert into @countries values (7205,'Kazakhstan')
---insert into @countries values (7206,'Kyrgyz Republic')
---insert into @countries values (7207,'Tajikistan')
---insert into @countries values (7208,'Turkmenistan')
---insert into @countries values (7211,'Uzbekistan')
---insert into @countries values (8000,'Americas')
---insert into @countries values (8100,'Northern America')
---insert into @countries values (8101,'Bermuda')
---insert into @countries values (8102,'Canada')
---insert into @countries values (8103,'St Pierre and Miquelon')
---insert into @countries values (8104,'United States of America')
---insert into @countries values (8200,'South America')
---insert into @countries values (8201,'Argentina')
---insert into @countries values (8202,'Bolivia')
---insert into @countries values (8203,'Brazil')
---insert into @countries values (8204,'Chile')
---insert into @countries values (8205,'Colombia')
---insert into @countries values (8206,'Ecuador')
---insert into @countries values (8207,'Falkland Islands')
---insert into @countries values (8208,'French Guiana')
---insert into @countries values (8211,'Guyana')
---insert into @countries values (8212,'Paraguay')
---insert into @countries values (8213,'Peru')
---insert into @countries values (8214,'Suriname')
---insert into @countries values (8215,'Uruguay')
---insert into @countries values (8216,'Venezuela')
---insert into @countries values (8299,'South America nec')
---insert into @countries values (8300,'Central America')
---insert into @countries values (8301,'Belize')
---insert into @countries values (8302,'Costa Rica')
---insert into @countries values (8303,'El Salvador')
---insert into @countries values (8304,'Guatemala')
---insert into @countries values (8305,'Honduras')
---insert into @countries values (8306,'Mexico')
---insert into @countries values (8307,'Nicaragua')
---insert into @countries values (8308,'Panama')
---insert into @countries values (8400,'Caribbean')
---insert into @countries values (8401,'Anguilla')
---insert into @countries values (8402,'Antigua and Barbuda')
---insert into @countries values (8403,'Aruba')
---insert into @countries values (8404,'Bahamas')
---insert into @countries values (8405,'Barbados')
---insert into @countries values (8406,'Cayman Islands')
---insert into @countries values (8407,'Cuba')
---insert into @countries values (8408,'Dominica')
---insert into @countries values (8411,'Dominican Republic')
---insert into @countries values (8412,'Grenada')
---insert into @countries values (8413,'Guadeloupe')
---insert into @countries values (8414,'Haiti')
---insert into @countries values (8415,'Jamaica')
---insert into @countries values (8416,'Martinique')
---insert into @countries values (8417,'Montserrat')
---insert into @countries values (8418,'Netherlands Antilles')
---insert into @countries values (8421,'Puerto Rico')
---insert into @countries values (8422,'St Kitts and Nevis')
---insert into @countries values (8423,'St Lucia')
---insert into @countries values (8424,'St Vincent and the Grenadines')
---insert into @countries values (8425,'Trinidad and Tobago')
---insert into @countries values (8426,'Turks and Caicos Islands')
---insert into @countries values (8427,'Virgin Islands British')
---insert into @countries values (8428,'Virgin Islands United States')
---insert into @countries values (9000,'Sub-Saharan Africa')
---insert into @countries values (9100,'Central and West Africa')
---insert into @countries values (9101,'Benin')
---insert into @countries values (9102,'Burkina Faso')
---insert into @countries values (9103,'Cameroon')
---insert into @countries values (9104,'Cape Verdi')
---insert into @countries values (9105,'Central African Republic')
---insert into @countries values (9106,'Chad')
---insert into @countries values (9107,'Congo')
---insert into @countries values (9108,'Congo Democratic Republic of')
---insert into @countries values (9111,'Cote d''Ivoire')
---insert into @countries values (9112,'Equatorial Guinea')
---insert into @countries values (9113,'Gabon')
---insert into @countries values (9114,'Gambia')
---insert into @countries values (9115,'Ghana')
---insert into @countries values (9116,'Guinea')
---insert into @countries values (9117,'Guinea Bissau')
---insert into @countries values (9118,'Liberia')
---insert into @countries values (9121,'Mali')
---insert into @countries values (9122,'Mauritania')
---insert into @countries values (9123,'Niger')
---insert into @countries values (9124,'Nigeria')
---insert into @countries values (9125,'Sao Tome and Principe')
---insert into @countries values (9126,'Senegal')
---insert into @countries values (9127,'Sierra Leone')
---insert into @countries values (9128,'Togo')
---insert into @countries values (9200,'Southern and East Africa')
---insert into @countries values (9201,'Angola')
---insert into @countries values (9202,'Botswana')
---insert into @countries values (9203,'Burundi')
---insert into @countries values (9204,'Comoros')
---insert into @countries values (9205,'Djibouti')
---insert into @countries values (9206,'Eritrea')
---insert into @countries values (9207,'Ethiopia')
---insert into @countries values (9208,'Kenya')
---insert into @countries values (9211,'Lesotho')
---insert into @countries values (9212,'Madagascar')
---insert into @countries values (9213,'Malawi')
---insert into @countries values (9214,'Mauritius')
---insert into @countries values (9215,'Mayotte')
---insert into @countries values (9216,'Mozambique')
---insert into @countries values (9217,'Namibia')
---insert into @countries values (9218,'Reunion')
---insert into @countries values (9221,'Rwanda')
---insert into @countries values (9222,'St Helena')
---insert into @countries values (9223,'Seychelles')
---insert into @countries values (9224,'Somalia')
---insert into @countries values (9225,'South Africa')
---insert into @countries values (9226,'Swaziland')
---insert into @countries values (9227,'Tanzania')
---insert into @countries values (9228,'Uganda')
---insert into @countries values (9231,'Zambia')
---insert into @countries values (9232,'Zimbabwe')
---insert into @countries values (9299,'Africa South and East')
---insert into @countries values (922,'0922 Channel Islands, nfd')
---insert into @countries values (924,'0924 Netherlands Antilles, nfd')
---insert into @countries values (1513,'1513 Pitcairn Islands')
---insert into @countries values (2107,'2107 Guernsey')
---insert into @countries values (2108,'2108 Jersey')
---insert into @countries values (2408,'2408 Aland Islands')
---insert into @countries values (3216,'3216 Kosovo')
---insert into @countries values (4108,'4108 Spanish North Africa')
---insert into @countries values (4111,'4111 South Sudan')
---insert into @countries values (8431,'8431 St Barthelemy')
---insert into @countries values (8432,'8432 St Martin (French part)')
---insert into @countries values (8433,'8433 Bonaire, Sint Eustatius and Saba')
---insert into @countries values (8434,'8434 Curacao')
---insert into @countries values (8435,'8435 Sint Maarten (Dutch part)')
---insert into @countries values (922,'Channel Islands, nfd')
---insert into @countries values (924,'Netherlands Antilles, nfd')
---insert into @countries values (1513,'Pitcairn Islands')
---insert into @countries values (2107,'Guernsey')
---insert into @countries values (2108,'Jersey')
---insert into @countries values (2408,'Aland Islands')
---insert into @countries values (3216,'Kosovo')
---insert into @countries values (4108,'Spanish North Africa')
---insert into @countries values (4111,'South Sudan')
---insert into @countries values (8431,'St Barthelemy')
---insert into @countries values (8432,'St Martin (French part)')
---insert into @countries values (8433,'Bonaire, Sint Eustatius and Saba')
---insert into @countries values (8434,'Curacao')
---insert into @countries values (8435,'Sint Maarten (Dutch part)')
---insert into @countries values (1,'0001')
---insert into @countries values (4,'0004')
---insert into @countries values (913,'0913')
---insert into @countries values (918,'0918')
---insert into @countries values (921,'0921')
---insert into @countries values (6101,'China(excludes SARs and Taiwan Province)')
---insert into @countries values (8206,'Equador')
---insert into @countries values (6202,'Korea, Democratic People''s Republic of')
---insert into @countries values (6203,'Korea, Republic of (South)')
---insert into @countries values (3308,'Russian Federation')
---insert into @countries values (913,'The Former Yugoslav Republicof Macedonia')
---insert into @countries values (2100,'United Kingdom, nfd')
---insert into @countries values (5105,'Viet Nam')
---insert into @countries values (8428,'Virgin Islands, United States')
-
-
 if object_id('tempdb..#omis') is not null
  drop table #omis
 if object_id('tempdb..#omis_final') is not null
@@ -586,7 +240,7 @@ if object_id('tempdb..#omis_final') is not null
 SELECT DISTINCT TreatmentEvents.Pat_ID1,
 	TreatmentEvents.PCP_GROUP_ID AS GroupID, 
     Demographics.SS_Number          AS MedicareNumber,			-- 001 medicare number
-	TreatmentEvents.Inst_Abrv as HospitalCode, 
+	--TreatmentEvents.Inst_Abrv as HospitalCode, 
 	ident_partial.IDA AS MRN, 
 	ident_partial.IDB AS [UniqueIdentifier],    --AUID,  -- 003 patient area unique identifier
 	Demographics.First_Name         AS GivenName1,   -- 004 first given name
@@ -615,8 +269,8 @@ SELECT DISTINCT TreatmentEvents.Pat_ID1,
 	staff_details.OncAHPRA	 AS AmoRegReferringNumber,    -- oncologist
 	staff_details.OncName      AS DoctorName,			 -- oncologist
 	--TreatmentEvents.address1 + ', ' + TreatmentEvents.address2 + ', ' + TreatmentEvents.locality + ', ' + TreatmentEvents.State_Province + ' ' + TreatmentEvents.Postal AS AddressOnc, 
-    TreatmentEvents.Department_OID         AS TreatingFacilityCode,  -- HospitalID,     -- Hospital number      /* User Defined Entries (Location Not Decided Yet)*/ 
-    TreatmentEvents.Pager           AS FacilityCode,   -- DepartmentID,   	-- 030 cancer department number        /* User Defined Entries (Location Not Decided Yet)*/ 
+     @HospCode      AS TreatingFacilityCode,  -- HospitalID,     -- Hospital number      /* User Defined Entries (Location Not Decided Yet)*/ 
+    @CancerCode           AS FacilityCode,   -- DepartmentID,   	-- 030 cancer department number        /* User Defined Entries (Location Not Decided Yet)*/ 
     cast( MedicalRecords.Dx_DtTm1 as date)   AS	DateOfDiagnosis,	 --   convert(varchar(10), isnull(MedicalRecords.Dx_DtTm1,null),103)         	 -- PrimaryDiagnosisDate, 
 	
     CASE 
@@ -747,8 +401,8 @@ FROM
 			patient_care_plan.Regimen, 
 			patient_care_plan.Start_Date, 
 			patient_care_plan.End_Date, 
-			patient_care_plan.DI_DtTm, --patient_care_plan.End_DtTm1, --Debug
-			TreatmentLocation.Inst_ID, 
+			patient_care_plan.DI_DtTm--, --patient_care_plan.End_DtTm1, --Debug
+			/*TreatmentLocation.Inst_ID, 
 			TreatmentLocation.Pager, 
 			TreatmentLocation.Department_OID, 
 			TreatmentLocation.Inst_Abrv,
@@ -758,6 +412,8 @@ FROM
 			TreatmentLocation.State_Province, 
 			TreatmentLocation.Postal, 
 			TreatmentLocation.Display_ID
+			'3' as TreatmentLocation.Inst_ID*/
+
 		FROM 
 		(SELECT PatCPlan.PCP_ID, 
 				PatCPlan.Pat_ID1, 
@@ -832,7 +488,9 @@ FROM
 				--and ((CycleEffDate.Start_Date <= CycleEffDate.End_Date) or (CycleEffDate.DI_DtTm <= CycleEffDate.End_Date) or CycleEffDate.End_Date is null)
 				--and CycleEffDate.PCP_GROUP_ID in (138887,147323,182176,186988,190510,196018,202214,210225,224788,243999,244816,245573,249727,252714,265912,255720,261844)
 		) AS patient_care_plan 
-		LEFT OUTER JOIN 
+		
+		--Single inst Only
+		/*LEFT OUTER JOIN 
 				(SELECT attendance_table_2.Pat_ID1, 
 					attendance_table_2.Inst_ID, 
 					Config.Pager, 
@@ -854,7 +512,7 @@ FROM
 						group by Pat_ID1, Inst_ID
 					) AS attendance_table_2
 					join Config with (nolock) on Config.Inst_ID = attendance_table_2.Inst_ID and attendance_table_2.row = 1 
-			) AS TreatmentLocation ON TreatmentLocation.Pat_ID1 = patient_care_plan.Pat_ID1
+			) AS TreatmentLocation ON TreatmentLocation.Pat_ID1 = patient_care_plan.Pat_ID1*/
 		LEFT OUTER JOIN
 		--(select *
 		--from ( select PatCPlan.PCP_Group_ID
@@ -1131,7 +789,7 @@ FROM
 			AND E_UPIN.Ext_Type = 'UPIN'
 			) as AttendingDr ON AttendingDr.Staff_ID = S.Staff_ID
 	) AS staff_details ON staff_details.Staff_ID = TreatmentEvents.MD_ID			
-	LEFT OUTER JOIN
+	/*LEFT OUTER JOIN
 	( SELECT CASE WHEN id_table.External_ID IS NULL 
 				THEN ltrim(RTRIM(staff_details_table.Suffix) + ' ' +RTRIM(staff_details_table.First_Name) + ' ' + RTRIM(staff_details_table.Last_Name))
 				ELSE ltrim(RTRIM(external_details_table.Suffix) + ' ' +RTRIM(external_details_table.First_Name) + ' ' + RTRIM(external_details_table.Last_Name))
@@ -1148,7 +806,7 @@ FROM
 			LEFT OUTER JOIN [External]  AS external_details_table with (nolock) ON external_details_table.External_ID = id_table.External_ID
 			LEFT OUTER JOIN Ext_ID AS ahpra_table with (nolock) ON staff_details_table.Staff_ID = ahpra_table.Staff_ID OR external_details_table.External_ID = ahpra_table.External_ID and ahpra_table.Ext_Type = 'ST LICENSE'
 	) AS external_staff
-	ON external_staff.Pat_ID1 = TreatmentEvents.PAT_ID1
+	ON external_staff.Pat_ID1 = TreatmentEvents.PAT_ID1*/
 	/* ---------------------------------- IDENT query ------------------------------------------------*/
 	LEFT OUTER JOIN
 	(SELECT ident_version.Pat_ID1, Ident.IDA, Ident.IDB, Ident.IDC, Ident.IDD, Ident.IDE, Ident.IDF
