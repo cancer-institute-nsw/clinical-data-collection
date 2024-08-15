@@ -1,1 +1,1 @@
-Select CFG_ID as GroupID, CFG_ID as MRN, CFG_ID as UniqueIdentifer * From Config
+Select CFG_ID as GroupID, CFG_ID as MRN, CFG_ID as UniqueIdentifer, * From Config
