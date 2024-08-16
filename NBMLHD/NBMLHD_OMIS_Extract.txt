@@ -32,22 +32,18 @@ SET ANSI_WARNINGS OFF
  
 declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @ExtractDate date, @HospCode varchar(5), @CancerCode varchar(5)
 
-set @startdate = '&[ReportingStartDate]&'		-- start of month
-set @enddate = '&[ReportingEndDate]&'			-- end of month
-set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
-set @showheader = 'n'				-- Y = show file name, N = omit file name 
-set @ExtractDate = GETDATE()
-
-/*
-set @startdate = '2024-01-01'		-- start of month
-set @enddate = '2024-01-30'			-- end of month
+set @HospCode = 'D210'
+set @CancerCode = 'D076'
 set @QA = 'n'						-- Y = show real dates, N = DDMMYYYY
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
 set @ExtractDate = GETDATE()
 set @debug = @QA
-set @HospCode = 'D210'
-set @CancerCode = 'D076'
-*/
+set @startdate = '&[ReportingStartDate]&'		-- start of month
+set @enddate = '&[ReportingEndDate]&'			-- end of month
+
+/*
+set @startdate = '2024-01-01'		-- start of month
+set @enddate = '2024-01-30'			-- end of month
 
 declare @countries table (code int, name varchar(200))
 declare @states table (code varchar(3), name varchar(200))
