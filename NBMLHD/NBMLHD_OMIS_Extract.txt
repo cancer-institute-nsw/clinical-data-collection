@@ -44,7 +44,7 @@ set @enddate = '&[ReportingEndDate]&'			-- end of month
 /*
 set @startdate = '2024-01-01'		-- start of month
 set @enddate = '2024-01-30'			-- end of month
-
+*/
 declare @countries table (code int, name varchar(200))
 declare @states table (code varchar(3), name varchar(200))
 declare @indigenious table (code varchar(3), name varchar(200))
