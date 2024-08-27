@@ -18,7 +18,7 @@ There are three main queries
 ****Updates *****
 * 20230516 version v0.1 completed using mappings from scoping excel.
 * 20231115 version 1.0 updated MDT date and confimed consult mapping.
-* 20240801 updated extract with ExtractDate to match new OMIS pipeline specs.
+* 20240801 Updated extract with ExtractDate to match new OMIS pipeline specs and statewide changes.
 *
 *
 *
@@ -45,6 +45,7 @@ set @enddate = '&[ReportingEndDate]&'			-- end of month
 set @startdate = '2024-01-01'		-- start of month
 set @enddate = '2024-01-30'			-- end of month
 */
+
 declare @countries table (code int, name varchar(200))
 declare @states table (code varchar(3), name varchar(200))
 declare @indigenious table (code varchar(3), name varchar(200))
@@ -860,8 +861,9 @@ FROM
 			(stage7.Day_Offset + 1 ) AS day_of_week 
 		FROM PatCPlan  AS stage1 with (nolock)
 			INNER JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
-			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) 
-			INNER JOIN PharmAdm  AS stage4 with (nolock) ON stage3.ORC_ID = stage4.ORC_Set_ID
+			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) AND Version = 0
+			INNER JOIN PharmOrd with (nolock) ON Stage3.ORC_Set_ID = PharmOrd.ORC_Set_ID AND stage3.Version = PharmOrd.Version
+			INNER JOIN PharmAdm  AS stage4 with (nolock) ON PharmOrd.RXO_Set_ID= stage4.RXO_Set_ID
 			left join ObsDef obs with (nolock) on obs.OBD_ID = stage4.Adm_Units
 			INNER JOIN Drug AS stage5 with (nolock) ON stage4.Adm_Code = stage5.DRG_ID
 			left JOIN CPItem AS stage7 with (nolock) ON stage2.CPI_ID = stage7.CPI_ID

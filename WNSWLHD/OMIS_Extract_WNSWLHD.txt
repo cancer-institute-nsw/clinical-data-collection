@@ -53,22 +53,35 @@
 * 20191003: InitConsultDate - Added 110
 * 20191010: Removed Activity Type Filter
 * 20220606: Update to single extract all Facilities.
+* 20240801: Updated to statewide extract
+				-ExtractDate variable added
+				-Patient Location mapping to @PatientLocation tabel variable & EVIQ protocol mapping into @cplan_mapped table variable - line 620
+				-
 ******************************************************************/
 
 --use [MOSAIQ]
 --go
  
- set nocount on
+set nocount on
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SET ANSI_WARNINGS OFF
   
 declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @hosp_code varchar(10), @facility varchar(10), @ExtractDate date
-
+/*
 set @startdate =  '&[ReportingStartDate]&'	-- start of month
 set @enddate =  '&[ReportingEndDate]&'		-- end of month
---set @hosp_code = 'WNSW'				-- Hospital code (ignore):  K211 = Dubbo, L216 = ORANGE, S201 = Broken Hill, L201 = Bathurst
+--set @hosp_code = 'WNSW'					-- Hospital code (ignore):  K211 = Dubbo, L216 = ORANGE, S201 = Broken Hill, L201 = Bathurst
+set @QA = 'n'								-- Y = QA mode, N = final output for upload to CI
+set @showheader = 'n'						-- Y = show file name, N = omit file name 
+set @ExtractDate = getdate()				--ExtractDate set to today
+ */
+ 
+ 
+ set @startdate = '2024-06-01'            -- start of month
+set @enddate = '2024-06-30'              -- end of month
 set @QA = 'n'						-- Y = QA mode, N = final output for upload to CI
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
-set @ExtractDate = getdate()				--ExtractDate set to today
- 
+set @ExtractDate = getdate()
 
 
 declare @dt varchar(12)
@@ -667,9 +680,6 @@ WHERE row = 1;
 
 
 /************OMIS START******************/
-
-
-
 if object_id('tempdb..#omis') is not null
  drop table #omis
 
@@ -1264,8 +1274,9 @@ FROM
 			(stage7.Day_Offset + 1 ) AS day_of_week 
 		FROM PatCPlan  AS stage1 with (nolock)
 			INNER JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
-			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) 
-			INNER JOIN PharmAdm  AS stage4 with (nolock) ON stage3.ORC_ID = stage4.ORC_Set_ID
+			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) AND Version = 0
+			INNER JOIN PharmOrd with (nolock) ON Stage3.ORC_Set_ID = PharmOrd.ORC_Set_ID AND stage3.Version = PharmOrd.Version
+			INNER JOIN PharmAdm  AS stage4 with (nolock) ON PharmOrd.RXO_Set_ID= stage4.RXO_Set_ID 
 			left join ObsDef obs with (nolock) on obs.OBD_ID = stage4.Adm_Units
 			INNER JOIN Drug AS stage5 with (nolock) ON stage4.Adm_Code = stage5.DRG_ID
 			left JOIN CPItem AS stage7 with (nolock) ON stage2.CPI_ID = stage7.CPI_ID

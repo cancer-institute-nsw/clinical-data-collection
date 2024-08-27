@@ -26,8 +26,9 @@ There are three main queries
 *20220505	Added fallback for missing Facility to Gosford (should only occur for patient administered from ward with no other appts in MOSAIQ)
 *20230118	Updated script to remove Pathology Test patient.
 *20240805	Updated script  Extract Date using getdate variable.
-							Eviq Mapping Table can now run this query to see the old/vs new mapping for auditing.  SELECT * FROM CPlan s INNER JOIN @cplan_mapped f ON s.CPL_ID = f.CPL_ID  WHERE CPlan.Version = 0 
-							Patient Location improvment with date param.
+							Eviq Mapping Table can now run this query to see the old/vs new mapping for auditing. Line 587  SELECT * FROM CPlan s INNER JOIN @cplan_mapped f ON s.CPL_ID = f.CPL_ID  WHERE CPlan.Version = 0 
+							Patient Location improvment with date param. Line 600
+							Updated Drug Details ORC_SET_ID link
 **********************************************************************************************************************************/
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 SET nocount on
@@ -152,7 +153,6 @@ insert into @drugadminroute values (6,7013)           --Intrathecal
 insert into @drugadminroute values (2,6515)           --IM                            
 
 
- 
 -- update 20220302
 insert into @episodeintent values ('9', 'BMT Regimen' )
 insert into @episodeintent values ('21', 'Curative - Adjuvant' )
@@ -177,7 +177,7 @@ insert into @episodeintent values ('2', 'Chemoradiation' )
 insert into @episodeintent values ('2', 'Transplant' )
 insert into @episodeintent values ('1', 'Prophylactic' )
 
- 
+
 -- update 20220302
 insert into @laterality values (3, 'Bilateral - Simultan' )
 insert into @laterality values (2, '1 - Right' )
@@ -214,7 +214,6 @@ insert into @indigenious values (2, 'Torres Strait Island' )
 insert into @indigenious values (1, 'Aboriginal Origin   ' )
 
 
-
 -- update 20220302
 insert into @states values (0, 'CD:554923758' )
 insert into @states values (99, 'UNK' )
@@ -234,7 +233,6 @@ insert into @states values (99, 'NFA' )
 insert into @states values (4, 'SA' )
 insert into @states values (99, 'Region' )
 insert into @states values (5, 'WA' )
-
 
 
 -- No changes
@@ -1240,8 +1238,9 @@ FROM
 			(stage7.Day_Offset + 1 ) AS day_of_week 
 		FROM PatCPlan  AS stage1 with (nolock)
 			INNER JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
-			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) 
-			INNER JOIN PharmAdm  AS stage4 with (nolock) ON stage3.ORC_ID = stage4.ORC_Set_ID
+			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) AND Version = 0
+			INNER JOIN PharmOrd with (nolock) ON Stage3.ORC_Set_ID = PharmOrd.ORC_Set_ID AND stage3.Version = PharmOrd.Version
+			INNER JOIN PharmAdm  AS stage4 with (nolock) ON PharmOrd.RXO_Set_ID= stage4.RXO_Set_ID
 			left join ObsDef obs with (nolock) on obs.OBD_ID = stage4.Adm_Units
 			INNER JOIN Drug AS stage5 with (nolock) ON stage4.Adm_Code = stage5.DRG_ID
 			left JOIN CPItem AS stage7 with (nolock) ON stage2.CPI_ID = stage7.CPI_ID

@@ -1264,9 +1264,10 @@ FROM
 			case when cast(stage4.Adm_End_DtTm as date) < dateadd(d, stage8.Cycle_Length*-1,@enddate) then 1 else 0 end as isvalid,
 			row_number() over (partition by stage1.Pat_ID1, stage1.PCP_GROUP_ID  order by stage4.Adm_End_DtTm desc) as roww
 		FROM PatCPlan  AS stage1 with (nolock) 
-			JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
-			JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) 
-			JOIN PharmAdm  AS stage4 with (nolock) ON stage3.ORC_ID = stage4.ORC_Set_ID
+			INNER JOIN PatCItem AS stage2 with (nolock) ON stage1.PCP_ID = stage2.PCP_ID
+			INNER JOIN Orders  AS stage3 with (nolock) ON stage2.PCI_ID = stage3.PCI_ID and stage3.Order_Type in (2, 4, 5, 6) AND Version = 0
+			INNER JOIN PharmOrd with (nolock) ON Stage3.ORC_Set_ID = PharmOrd.ORC_Set_ID AND stage3.Version = PharmOrd.Version
+			INNER JOIN PharmAdm  AS stage4 with (nolock) ON PharmOrd.RXO_Set_ID= stage4.RXO_Set_ID
 			JOIN CPItem AS stage7 with (nolock) ON stage2.CPI_ID = stage7.CPI_ID
 			JOIN CPlan AS stage8 with (nolock) ON stage1.CPL_ID = stage8.CPL_ID
 			--join drug d with (nolock) on d.DRG_ID = stage4.Adm_Code 
