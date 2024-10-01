@@ -1199,7 +1199,7 @@ FROM
 			LEFT OUTER JOIN Ext_ID with (nolock) ON Staff.Staff_ID = Ext_ID.Staff_ID
 		WHERE Ext_ID.Ext_Type = 'AHPRA'  --'ST LICENSE'
 	) AS staff_details ON staff_details.Staff_ID = TreatmentEvents.MD_ID			
-	LEFT OUTER JOIN
+	/*LEFT OUTER JOIN
 	( SELECT CASE WHEN id_table.External_ID IS NULL 
 				THEN ltrim(RTRIM(staff_details_table.Suffix) + ' ' +RTRIM(staff_details_table.First_Name) + ' ' + RTRIM(staff_details_table.Last_Name))
 				ELSE ltrim(RTRIM(external_details_table.Suffix) + ' ' +RTRIM(external_details_table.First_Name) + ' ' + RTRIM(external_details_table.Last_Name))
@@ -1215,7 +1215,7 @@ FROM
 			LEFT OUTER JOIN Staff AS staff_details_table with (nolock) ON staff_details_table.Staff_ID = id_table.Staff_ID
 			LEFT OUTER JOIN [External]  AS external_details_table with (nolock) ON external_details_table.External_ID = id_table.External_ID
 			LEFT OUTER JOIN Ext_ID AS ahpra_table with (nolock) ON staff_details_table.Staff_ID = ahpra_table.Staff_ID OR external_details_table.External_ID = ahpra_table.External_ID and ahpra_table.Ext_Type = 'AHPRA'  --'ST LICENSE'
-	) AS external_staff ON external_staff.Pat_ID1 = TreatmentEvents.PAT_ID1
+	) AS external_staff ON external_staff.Pat_ID1 = TreatmentEvents.PAT_ID1*/
 	/* ---------------------------------- IDENT query ------------------------------------------------*/
 	LEFT OUTER JOIN
 	(SELECT ident_version.Pat_ID1, Ident.IDA, Ident.IDB, Ident.IDC, Ident.IDD, Ident.IDE, Ident.IDF
