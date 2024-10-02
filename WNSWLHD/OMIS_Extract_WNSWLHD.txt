@@ -56,7 +56,10 @@
 * 20240801: Updated to statewide extract
 				-ExtractDate variable added
 				-Patient Location mapping to @PatientLocation tabel variable & EVIQ protocol mapping into @cplan_mapped table variable - line 620
-				-
+*20240101	Error foundin script missing discontinued careplan drugs. Only an issue for retrospective work.
+			stage1.status_enum in (0,2,3,5,23)	-- unknown, close, complete, approve, discontinue	
+			Also End_Dtm IS NOT NULL -- this mean drugs admin must have an end date.
+			Header Added
 ******************************************************************/
 
 --use [MOSAIQ]
@@ -67,23 +70,23 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
 SET ANSI_WARNINGS OFF
   
 declare @startdate date, @enddate date, @debug char(1), @hospital varchar(20) , @QA char(1), @showheader varchar(1), @hosp_code varchar(10), @facility varchar(10), @ExtractDate date
-/*
+
 set @startdate =  '&[ReportingStartDate]&'	-- start of month
 set @enddate =  '&[ReportingEndDate]&'		-- end of month
 --set @hosp_code = 'WNSW'					-- Hospital code (ignore):  K211 = Dubbo, L216 = ORANGE, S201 = Broken Hill, L201 = Bathurst
 set @QA = 'n'								-- Y = QA mode, N = final output for upload to CI
 set @showheader = 'n'						-- Y = show file name, N = omit file name 
 set @ExtractDate = getdate()				--ExtractDate set to today
- */
+
  
- 
+ /*
  set @startdate = '2024-06-01'            -- start of month
 set @enddate = '2024-06-30'              -- end of month
 set @QA = 'n'						-- Y = QA mode, N = final output for upload to CI
 set @showheader = 'n'				-- Y = show file name, N = omit file name 
 set @ExtractDate = getdate()
 
-
+*/
 declare @dt varchar(12)
 if @showheader = 'Y'
 begin
@@ -1305,9 +1308,9 @@ FROM
 		WHERE stage4.Adm_Amount >= 0 
 			and stage4.Status_Enum in (0,1,2,3,5)		-- unknown,void, close, complete, approve  
 			and stage1.status_enum in (0,1,2,3,5,23)	-- unknown,void, close, complete, approve, discontinue
-			and stage4.Adm_End_DtTm is not null
+			--and stage4.Adm_End_DtTm is not null
 			--and d.drug_type in (select obd_id from ObsDef where label like 'antineoplastic%' or label like 'chemo%')    -- around 15% difference if only select chemo types compare to all types
-	) as last_admin on last_admin.regimen_pat_id = Demographics.Pat_ID1  AND TreatmentEvents.PCP_GROUP_ID = last_admin.group_id  and last_admin.roww = 1 and last_admin.isvalid = 1
+	) as last_admin on last_admin.regimen_pat_id = Demographics.Pat_ID1  AND TreatmentEvents.PCP_GROUP_ID = last_admin.group_id  and last_admin.roww = 1 --and last_admin.isvalid = 1
 
 	left join (SELECT stage1.Pat_ID1 AS regimen_pat_id, 
 			stage1.PCP_GROUP_ID AS group_id,
@@ -1322,7 +1325,7 @@ FROM
 		WHERE stage4.Adm_Amount >= 0 
 			and stage4.Status_Enum in (0,1,2,3,5)		-- unknown,void, close, complete, approve  
 			and stage1.status_enum in (0,1,2,3,5,23)	-- unknown,void, close, complete, approve, discontinue
-			and stage4.Adm_End_DtTm is not null
+			--and stage4.Adm_End_DtTm is not null
 			--and d.drug_type in (select obd_id from ObsDef where label like 'antineoplastic%' or label like 'chemo%')	-- around 15% difference if only select chemo types compare to all types
 	) as first_admin on first_admin.regimen_pat_id = Demographics.Pat_ID1  AND TreatmentEvents.PCP_GROUP_ID = first_admin.group_id  and first_admin.roww = 1
 )
@@ -1764,6 +1767,7 @@ select distinct	cast(GroupID  as varchar(20)) as GroupID
 	,	CPlan_Name
 	,	Regimen
 	,   InitConsultDate
+	,@ExtractDate as ExtractDate
 into #omis_final
 from #omis
 where (ProtocolID = '1570' or COALESCE(LTRIM(RTRIM(ProtocolID)),'X') = 'X' or (isnumeric(ProtocolID)  = 0 and ISNUMERIC(replace(replace(replace(substring(ProtocolID,1,charindex(' ',ProtocolID)),'/',''),'b',''),'a','')) = 0))   
@@ -1823,16 +1827,16 @@ select distinct	cast(GroupID  as varchar(20))
 	,	EpisodeEndDate
 	,	AntiNeoplasticCycles
 	,	ProtocolID
-	,	null as NotificationEpisodeChemoCycle
-	,	null as OMISDrugName
-	,	null as NotificationEpisodeChemoDose
-	,	null as NotificationEpisodeChemoRouteID_original
-	,	null as NotificationEpisodeChemoRouteID
-	,	null as NotificationEpisodeChemoStartDate
-	,	null as NotificationEpisodeChemoEndDate
-	,	null as NotificationEpisodeChemoFrequency
-	,	null as NotificationEpisodeChemoFrequencyUnit
-	,	null as NotificationEpisodeChemoDay
+	,	NotificationEpisodeChemoCycle
+	,	OMISDrugName
+	,	NotificationEpisodeChemoDose
+	,	NotificationEpisodeChemoRouteID_original
+	,	NotificationEpisodeChemoRouteID
+	,	NotificationEpisodeChemoStartDate
+	,	NotificationEpisodeChemoEndDate
+	,	NotificationEpisodeChemoFrequency
+	,	NotificationEpisodeChemoFrequencyUnit
+	,	NotificationEpisodeChemoDay
 	,	ReferralDate
 	,	ConsultationDate
 	,	ClinicalTrialDate
@@ -1845,6 +1849,7 @@ select distinct	cast(GroupID  as varchar(20))
 	,	CPlan_Name
 	,	Regimen
 	,   InitConsultDate
+	,  @ExtractDate as ExtractDate
 from #omis
 where ProtocolID <> '1570' and (isnumeric(ProtocolID)  = 1  or ISNUMERIC(replace(replace(replace(substring(ProtocolID,1,charindex(' ',ProtocolID)),'/',''),'b',''),'a','')) = 1)
 --and TreatingFacilityCode = @hosp_code -- removed as now single extract
@@ -1853,7 +1858,7 @@ where ProtocolID <> '1570' and (isnumeric(ProtocolID)  = 1  or ISNUMERIC(replace
 
 
 
-( select @hosp_code  as GroupID  -- @hosp_code  as GroupID  --hospitalid  D209
+( select 'WNSWLHD'  as GroupID  -- @hosp_code  as GroupID  --hospitalid  D209
 	, replace(right('0'+convert(varchar(10),@startdate, 103),10),'/','')    as MedicareNumber  --reportstartdate
 	, replace(right('0'+convert(varchar(10),@enddate, 103),10),'/','')  as MRN  --reportenddate
 	, replace(right('0'+convert(varchar(10),getdate(), 103),10),'/','')    as  [UniqueIdentifier] --rundate
@@ -1997,7 +2002,7 @@ select isnull(cast(GroupID  as varchar(11)),'') as GroupID
 	, isnull(replace(right('0'+convert(varchar(10),ReferralToPalliativeCareDate , 103),10),'/',''),'') as ReferralToPalliativeCareDate
 	, isnull(replace(right('0'+convert(varchar(10),PerformanceStatusDate, 103),10),'/',''),'') as PerformanceStatusDate
 	, isnull(cast(PerformanceStatus as varchar(15)),'') as PerformanceStatus
-	, isnull(replace(right('0'+convert(varchar(10),@ExtractDate, 103),10),'/',''),'') as ExtractDate
+	, isnull(replace(right('0'+convert(varchar(10),ExtractDate, 103),10),'/',''),'') as ExtractDate
 from #omis_final  ) 
   
 
